@@ -153,12 +153,12 @@ for s in seen:
     [[ -z "$seasons" ]] && seasons=$(seq 1 5)
 
     local season
-    season=$(echo "$seasons" | fzf --prompt="Season: " --height=10 --reverse < /dev/tty)
+    season=$(echo "$seasons" | fzf --prompt="Season: " --height=10 --reverse)
     [[ -z "$season" ]] && exit 0
 
     # Episodes 1-30 (we don't know max without TMDB API key)
     local episode
-    episode=$(seq 1 30 | fzf --prompt="Episode: " --height=15 --reverse < /dev/tty)
+    episode=$(seq 1 30 | fzf --prompt="Episode: " --height=15 --reverse)
     [[ -z "$episode" ]] && exit 0
 
     echo "$season $episode"
