@@ -133,35 +133,23 @@ play_episode() {
 
 # ── season/episode picker ─────────────────────────────────────────────────────
 pick_episode() {
-    local tmdb_id="$1"
+    local tmdb_id="$1" out_file="$2"
 
     # Fetch season list from TMDB
     local seasons
     seasons=$(curl -s -A "Mozilla/5.0" "https://www.themoviedb.org/tv/${tmdb_id}" \
-        | python3 -c "
-import sys, re
-content = sys.stdin.read()
-matches = re.findall(r'Season (\d+)', content)
-seen = []
-for m in matches:
-    if m not in seen and m != '0':
-        seen.append(m)
-for s in seen:
-    print(s)
-" 2>/dev/null | head -20)
-
+        | python3 "$SCRIPT_DIR/tmdb_seasons.py" 2>/dev/null | head -20)
     [[ -z "$seasons" ]] && seasons=$(seq 1 5)
 
     local season
     season=$(echo "$seasons" | fzf --prompt="Season: " --height=10 --reverse)
-    [[ -z "$season" ]] && exit 0
+    [[ -z "$season" ]] && return 1
 
-    # Episodes 1-30 (we don't know max without TMDB API key)
     local episode
     episode=$(seq 1 30 | fzf --prompt="Episode: " --height=15 --reverse)
-    [[ -z "$episode" ]] && exit 0
+    [[ -z "$episode" ]] && return 1
 
-    echo "$season $episode"
+    echo "$season $episode" > "$out_file"
 }
 
 # ── commands ──────────────────────────────────────────────────────────────────
@@ -215,8 +203,9 @@ cmd_search() {
     fi
 
     # Pick episode manually
-    local picked
-    picked=$(pick_episode "$tmdb_id")
+    local pick_file; pick_file=$(mktemp)
+    pick_episode "$tmdb_id" "$pick_file" || { rm -f "$pick_file"; exit 0; }
+    local picked; picked=$(cat "$pick_file"); rm -f "$pick_file"
     [[ -z "$picked" ]] && exit 0
     local s e
     s=$(echo "$picked" | cut -d' ' -f1)
