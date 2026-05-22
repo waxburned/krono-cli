@@ -2,6 +2,14 @@
 
 A CLI tool to stream and track TV shows from your terminal, inspired by [ani-cli](https://github.com/pystardust/ani-cli).
 
+## Platform Support
+
+| Platform | Status |
+|---|---|
+| Linux | ✅ Fully supported |
+| macOS | ✅ Should work (install deps via homebrew) |
+| Windows | ❌ Not supported (bash script, no native Windows shell) |
+
 ## Dependencies
 
 - `fzf` — interactive selection
