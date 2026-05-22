@@ -43,7 +43,7 @@ get_stream_url() {
         -A "Mozilla/5.0" \
         -H "Origin: $VIDKING_REF" \
         -H "Referer: $VIDKING_REF" \
-        "${VIDEASY_BASE}?tmdbId=${tmdb_id}&season=${season}&episode=${episode}&mediaType=tv" \
+        "${VIDEASY_BASE}?tmdbId=${tmdb_id}&seasonId=${season}&episodeId=${episode}&mediaType=tv" \
         -o "$ct_file" || { rm -f "$ct_file"; die "Failed to fetch stream data"; }
 
     local result
@@ -63,7 +63,7 @@ get_subtitle_url() {
     local tmdb_id="$1" season="$2" episode="$3"
     local ct_file; ct_file=$(mktemp /tmp/krono_ct.XXXXXX)
     curl -s -A "Mozilla/5.0" -H "Origin: $VIDKING_REF" -H "Referer: $VIDKING_REF" \
-        "${VIDEASY_BASE}?tmdbId=${tmdb_id}&season=${season}&episode=${episode}&mediaType=tv" \
+        "${VIDEASY_BASE}?tmdbId=${tmdb_id}&seasonId=${season}&episodeId=${episode}&mediaType=tv" \
         -o "$ct_file" 2>/dev/null
     local result
     result=$(node "$SCRIPT_DIR/decrypt.js" "$ct_file" "$tmdb_id" 2>/dev/null)
