@@ -133,6 +133,7 @@ play_episode() {
             --force-media-title="${show_name} S${season}E${ep}" \
             --referrer="$VIDKING_REF" \
             --script="$SCRIPT_DIR/eof_detect.lua" \
+            --msg-level=ffmpeg/demuxer=no \
             "${start_flag[@]}" \
             "${sub_flag[@]}" \
             "$stream_url"
