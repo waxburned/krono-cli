@@ -1,5 +1,7 @@
 # krono-cli
 
+> **Disclaimer:** krono-cli is intended for educational purposes only. It does not host or distribute any content. All streams are sourced from third-party services. Use at your own risk and in accordance with the laws of your country.
+
 A CLI tool to stream and track TV shows from your terminal, inspired by [ani-cli](https://github.com/pystardust/ani-cli).
 
 ## Platform Support
