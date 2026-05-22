@@ -121,21 +121,25 @@ play_episode() {
         [[ -n "$sub_url" ]] && sub_flag=(--sub-file="$sub_url")
 
         info "Playing S${season}E${ep}..."
-        "$PLAYER" \
+        local eof_file; eof_file=$(mktemp)
+        rm -f "$eof_file"  # remove so we can check existence after
+        KRONO_EOF_FILE="$eof_file" "$PLAYER" \
             --force-media-title="${show_name} S${season}E${ep}" \
             --referrer="$VIDKING_REF" \
+            --script="$SCRIPT_DIR/eof_detect.lua" \
             "${sub_flag[@]}" \
             "$stream_url"
 
-        local exit_code=$?
         local next_ep=$(( ep + 1 ))
 
-        if [[ $exit_code -eq 0 ]]; then
+        if [[ -f "$eof_file" ]]; then
             # Episode finished naturally — save progress and countdown
+            rm -f "$eof_file"
             history_set "$tmdb_id" "$season" "$next_ep"
             countdown_next "S${season}E${next_ep}" || break
         else
-            # User quit early (q, Alt+F4, etc.) — just say goodbye
+            # User quit early — just say goodbye
+            rm -f "$eof_file"
             info "See you next time!"
             break
         fi
