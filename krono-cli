@@ -130,16 +130,14 @@ play_episode() {
         local exit_code=$?
         local next_ep=$(( ep + 1 ))
 
-        # Save progress
-        history_set "$tmdb_id" "$season" "$next_ep"
-
-        # If user quit early (non-zero exit), ask whether to continue
-        if [[ $exit_code -ne 0 ]]; then
-            read -rp "Continue to S${season}E${next_ep}? [y/N] " cont
-            [[ "${cont,,}" != "y" ]] && break
-        else
-            # Episode finished naturally — countdown to next
+        if [[ $exit_code -eq 0 ]]; then
+            # Episode finished naturally — save progress and countdown
+            history_set "$tmdb_id" "$season" "$next_ep"
             countdown_next "S${season}E${next_ep}" || break
+        else
+            # User quit early (q, Alt+F4, etc.) — just say goodbye
+            info "See you next time!"
+            break
         fi
 
         ep=$next_ep
