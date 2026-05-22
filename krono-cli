@@ -26,22 +26,12 @@ dep_check() {
 # ── TMDB search ──────────────────────────────────────────────────────────────
 tmdb_search() {
     local query="$1"
+    local encoded_query
+    encoded_query=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$query")
     curl -s \
         -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" \
-        "https://www.themoviedb.org/search/tv?query=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$query")" \
-    | python3 - << 'PYEOF'
-import sys, re, html
-content = sys.stdin.read()
-pattern = r'data-id="(\d+)"[^>]*>.*?<a[^>]*href="/tv/\d+-[^"]*"[^>]*>([^<]+)</a>.*?(\d{4})'
-matches = re.findall(pattern, content, re.DOTALL)
-seen = set()
-for tmdb_id, name, year in matches:
-    name = html.unescape(name.strip())
-    key = (tmdb_id, name)
-    if key not in seen:
-        seen.add(key)
-        print(f"{tmdb_id}\t{name} ({year})")
-PYEOF
+        "https://www.themoviedb.org/search/tv?query=${encoded_query}" \
+    | python3 "$SCRIPT_DIR/tmdb_search.py"
 }
 
 # ── fetch & decrypt stream ────────────────────────────────────────────────────
@@ -65,16 +55,7 @@ get_stream_url() {
     fi
 
     # Pick preferred quality, fallback to first available
-    echo "$result" | python3 - << PYEOF
-import json, sys
-data = json.load(sys.stdin)
-sources = data.get("data", {}).get("sources", [])
-quality = "$QUALITY"
-preferred = next((s for s in sources if s.get("quality") == quality), None)
-chosen = preferred or (sources[0] if sources else None)
-if chosen:
-    print(chosen["url"])
-PYEOF
+    echo "$result" | python3 "$SCRIPT_DIR/parse_stream.py"
 }
 
 # ── subtitle helper ───────────────────────────────────────────────────────────
@@ -87,29 +68,23 @@ get_subtitle_url() {
     local result
     result=$(node "$SCRIPT_DIR/decrypt.js" "$ct_file" "$tmdb_id" 2>/dev/null)
     rm -f "$ct_file"
-    echo "$result" | python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-subs = data.get('data', {}).get('subtitles', [])
-en = next((s for s in subs if 'english' in s.get('language','').lower()), None)
-if en: print(en['url'])
-" 2>/dev/null
+    echo "$result" | python3 "$SCRIPT_DIR/parse_sub.py" 2>/dev/null
 }
 
 # ── history helpers ───────────────────────────────────────────────────────────
 history_get() {
-    grep -m1 "^${1}\t" "$HISTORY_FILE" | cut -f2,3
+    grep -m1 "^${1}"$'\t' "$HISTORY_FILE" | cut -f2,3
 }
 history_set() {
     local key="$1" season="$2" ep="$3"
     local tmp; tmp=$(mktemp)
-    grep -v "^${key}\t" "$HISTORY_FILE" > "$tmp"
+    grep -v "^${key}"$'\t' "$HISTORY_FILE" > "$tmp"
     printf '%s\t%s\t%s\n' "$key" "$season" "$ep" >> "$tmp"
     mv "$tmp" "$HISTORY_FILE"
 }
 history_del() {
     local tmp; tmp=$(mktemp)
-    grep -v "^${1}\t" "$HISTORY_FILE" > "$tmp"
+    grep -v "^${1}"$'\t' "$HISTORY_FILE" > "$tmp"
     mv "$tmp" "$HISTORY_FILE"
 }
 
