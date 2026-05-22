@@ -1,0 +1,10 @@
+{
+  "name": "krono-cli",
+  "version": "0.1.0",
+  "description": "CLI tool to stream and track TV shows",
+  "main": "decrypt.js",
+  "dependencies": {
+    "crypto-js": "^4.2.0",
+    "hashids": "^2.3.0"
+  }
+}
