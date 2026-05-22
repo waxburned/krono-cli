@@ -153,12 +153,12 @@ for s in seen:
     [[ -z "$seasons" ]] && seasons=$(seq 1 5)
 
     local season
-    season=$(echo "$seasons" | fzf --prompt="Season: " --height=10 --reverse)
+    season=$(echo "$seasons" | fzf --prompt="Season: " --height=10 --reverse < /dev/tty)
     [[ -z "$season" ]] && exit 0
 
     # Episodes 1-30 (we don't know max without TMDB API key)
     local episode
-    episode=$(seq 1 30 | fzf --prompt="Episode: " --height=15 --reverse)
+    episode=$(seq 1 30 | fzf --prompt="Episode: " --height=15 --reverse < /dev/tty)
     [[ -z "$episode" ]] && exit 0
 
     echo "$season $episode"
@@ -193,7 +193,7 @@ cmd_search() {
     [[ -z "$results" ]] && die "No results found"
 
     local chosen
-    chosen=$(echo "$results" | fzf --prompt="Select show: " --height=20 --reverse --delimiter=$'\t' --with-nth=2)
+    chosen=$(echo "$results" | fzf --prompt="Select show: " --height=20 --reverse --delimiter=$'\t' --with-nth=2 < /dev/tty)
     [[ -z "$chosen" ]] && exit 0
 
     local tmdb_id show_name
