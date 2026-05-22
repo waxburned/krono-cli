@@ -3,7 +3,7 @@
 # github.com/waxburned/krono-cli
 
 # ── config ──────────────────────────────────────────────────────────────────
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 HISTORY_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/krono-cli/history.tsv"
 TMDB_BASE="https://api.themoviedb.org/3"
 VIDEASY_BASE="https://api.videasy.net/cdn/sources-with-title"
