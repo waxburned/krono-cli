@@ -72,16 +72,20 @@ get_subtitle_url() {
 }
 
 # ── history helpers ───────────────────────────────────────────────────────────
-# format: tmdb_id \t season \t episode \t position_seconds
+# format: tmdb_id \t show_name \t season \t episode \t position_seconds
 history_get() {
-    grep -m1 "^${1}"$'\t' "$HISTORY_FILE" | cut -f2-4
+    grep -m1 "^${1}"$'\t' "$HISTORY_FILE" | cut -f2-5
 }
 history_set() {
-    local key="$1" season="$2" ep="$3" pos="${4:-0}"
+    local key="$1" name="$2" season="$3" ep="$4" pos="${5:-0}"
     local tmp; tmp=$(mktemp)
     grep -v "^${key}"$'\t' "$HISTORY_FILE" > "$tmp"
-    printf '%s\t%s\t%s\t%s\n' "$key" "$season" "$ep" "$pos" >> "$tmp"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$key" "$name" "$season" "$ep" "$pos" >> "$tmp"
     mv "$tmp" "$HISTORY_FILE"
+}
+fmt_pos() {
+    local s="$1"
+    printf '%d:%02d:%02d' "$(( s/3600 ))" "$(( (s%3600)/60 ))" "$(( s%60 ))"
 }
 history_del() {
     local tmp; tmp=$(mktemp)
@@ -138,13 +142,13 @@ play_episode() {
 
         if [[ "$result" == "eof" ]]; then
             # Episode finished naturally — save next ep at pos 0 and countdown
-            history_set "$tmdb_id" "$season" "$next_ep" 0
+            history_set "$tmdb_id" "$show_name" "$season" "$next_ep" 0
             countdown_next "S${season}E${next_ep}" || break
         else
             # User quit early — save current position and say goodbye
             local pos="${result:-0}"
-            history_set "$tmdb_id" "$season" "$ep" "$pos"
-            info "See you next time! Progress saved at ${pos}s."
+            history_set "$tmdb_id" "$show_name" "$season" "$ep" "$pos"
+            info "See you next time! Progress saved at $(fmt_pos "$pos")."
             break
         fi
 
@@ -181,8 +185,10 @@ cmd_list() {
         return
     fi
     echo "Tracked shows:"
-    while IFS=$'\t' read -r tmdb_id season ep; do
-        printf '  %-10s  S%sE%s\n' "($tmdb_id)" "$season" "$ep"
+    while IFS=$'\t' read -r tmdb_id show_name season ep pos; do
+        local label="S${season}E${ep}"
+        [[ "${pos:-0}" -gt 0 ]] 2>/dev/null && label+=" ($(fmt_pos "$pos"))"
+        printf '  %-30s  %s\n' "$show_name" "$label"
     done < "$HISTORY_FILE"
 }
 
@@ -215,11 +221,11 @@ cmd_search() {
     saved=$(history_get "$tmdb_id")
     if [[ -n "$saved" ]]; then
         local saved_s saved_e saved_pos
-        saved_s=$(echo "$saved" | cut -f1)
-        saved_e=$(echo "$saved" | cut -f2)
-        saved_pos=$(echo "$saved" | cut -f3)
+        saved_s=$(echo "$saved" | cut -f2)
+        saved_e=$(echo "$saved" | cut -f3)
+        saved_pos=$(echo "$saved" | cut -f4)
         local resume_msg="S${saved_s}E${saved_e}"
-        [[ "${saved_pos:-0}" -gt 0 ]] 2>/dev/null && resume_msg+=" at ${saved_pos}s"
+        [[ "${saved_pos:-0}" -gt 0 ]] 2>/dev/null && resume_msg+=" at $(fmt_pos "$saved_pos")"
         read -rp "Continue '${show_name}' from ${resume_msg}? [Y/n] " cont
         if [[ "${cont,,}" != "n" ]]; then
             play_episode "$tmdb_id" "$show_name" "$saved_s" "$saved_e" "$saved_pos"
