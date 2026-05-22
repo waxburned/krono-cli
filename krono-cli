@@ -193,7 +193,7 @@ cmd_search() {
     [[ -z "$results" ]] && die "No results found"
 
     local chosen
-    chosen=$(echo "$results" | fzf --prompt="Select show: " --height=20 --reverse --delimiter=$'\t' --with-nth=2 < /dev/tty)
+    chosen=$(echo "$results" | fzf --prompt="Select show: " --height=20 --reverse --delimiter=$'\t' --with-nth=2)
     [[ -z "$chosen" ]] && exit 0
 
     local tmdb_id show_name
