@@ -188,7 +188,7 @@ cmd_list() {
     while IFS=$'\t' read -r tmdb_id show_name season ep pos; do
         local label="S${season}E${ep}"
         [[ "${pos:-0}" -gt 0 ]] 2>/dev/null && label+=" ($(fmt_pos "$pos"))"
-        printf '  %-30s  %s\n' "$show_name" "$label"
+        printf '  %-30s  %-12s  (id: %s)\n' "$show_name" "$label" "$tmdb_id"
     done < "$HISTORY_FILE"
 }
 
