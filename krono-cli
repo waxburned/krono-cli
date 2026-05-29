@@ -3,7 +3,7 @@
 # github.com/waxburned/krono-cli
 
 # ── config ──────────────────────────────────────────────────────────────────
-SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)"
 HISTORY_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/krono-cli/history.tsv"
 TMDB_BASE="https://api.themoviedb.org/3"
 VIDEASY_BASE="https://api.videasy.net/cdn/sources-with-title"
@@ -129,7 +129,8 @@ play_episode() {
         info "Playing S${season}E${ep}${start_pos:+$([ "$start_pos" -gt 0 ] 2>/dev/null && echo " (resuming from ${start_pos}s)")}..."
         local eof_file; eof_file=$(mktemp)
         rm -f "$eof_file"
-        KRONO_EOF_FILE="$eof_file" "$PLAYER" \
+        local eof_file_native; eof_file_native=$(cygpath -w "$eof_file" 2>/dev/null || echo "$eof_file")
+        KRONO_EOF_FILE="$eof_file_native" "$PLAYER" \
             --force-media-title="${show_name} S${season}E${ep}" \
             --referrer="$VIDKING_REF" \
             --script="$SCRIPT_DIR/eof_detect.lua" \
