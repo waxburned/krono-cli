@@ -6,7 +6,7 @@
 SCRIPT_DIR="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)"
 HISTORY_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/krono-cli/history.tsv"
 TMDB_BASE="https://api.themoviedb.org/3"
-VIDEASY_BASE="https://api.videasy.net/cdn/sources-with-title"
+VIDEASY_API="https://api.videasy.net"
 VIDKING_REF="https://www.vidking.net/"
 PLAYER="${KRONO_PLAYER:-mpv}"
 QUALITY="${KRONO_QUALITY:-1080p}"
@@ -35,27 +35,50 @@ tmdb_search() {
 }
 
 # ── fetch & decrypt stream ────────────────────────────────────────────────────
-get_stream_url() {
-    local tmdb_id="$1" season="$2" episode="$3"
+_fetch_stream() {
+    local provider="$1" tmdb_id="$2" season="$3" episode="$4" imdb_id="$5"
+    local params="tmdbId=${tmdb_id}&seasonId=${season}&episodeId=${episode}&mediaType=tv"
+    [[ -n "$imdb_id" ]] && params+="&imdbId=${imdb_id}"
+
     local ct_file; ct_file=$(mktemp /tmp/krono_ct.XXXXXX)
 
-    curl -s \
-        -A "Mozilla/5.0" \
-        -H "Origin: $VIDKING_REF" \
-        -H "Referer: $VIDKING_REF" \
-        "${VIDEASY_BASE}?tmdbId=${tmdb_id}&seasonId=${season}&episodeId=${episode}&mediaType=tv" \
-        -o "$ct_file" || { rm -f "$ct_file"; die "Failed to fetch stream data"; }
+    curl -s -A "Mozilla/5.0" -H "Origin: $VIDKING_REF" -H "Referer: $VIDKING_REF" \
+        "${VIDEASY_API}/${provider}/sources-with-title?${params}" \
+        -o "$ct_file" 2>/dev/null || { rm -f "$ct_file"; return 1; }
 
     local result
     result=$(node "$SCRIPT_DIR/decrypt.js" "$ct_file" "$tmdb_id" 2>/dev/null)
     rm -f "$ct_file"
 
-    if [[ $(echo "$result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('success'))") != "True" ]]; then
-        die "Decryption failed"
-    fi
+    [[ $(echo "$result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('success'))" 2>/dev/null) != "True" ]] && return 1
 
-    # Pick preferred quality, fallback to first available
-    echo "$result" | python3 "$SCRIPT_DIR/parse_stream.py"
+    local url
+    url=$(echo "$result" | python3 "$SCRIPT_DIR/parse_stream.py")
+    [[ -z "$url" ]] && return 1
+    echo "$url"
+}
+
+get_imdb_id() {
+    curl -s -A "Mozilla/5.0" "https://www.themoviedb.org/tv/$1" 2>/dev/null \
+        | python3 -c "
+import sys, re
+m = re.search(r'href=\"https://www\.imdb\.com/title/(tt[0-9]+)', sys.stdin.read())
+print(m.group(1) if m else '')
+"
+}
+
+get_stream_url() {
+    local tmdb_id="$1" season="$2" episode="$3"
+
+    local url
+    url=$(_fetch_stream "cdn" "$tmdb_id" "$season" "$episode" "")
+    [[ -n "$url" ]] && { echo "$url"; return; }
+
+    info "Primary source unavailable, trying alternate source..."
+    local imdb_id
+    imdb_id=$(get_imdb_id "$tmdb_id")
+    url=$(_fetch_stream "e3b0c442" "$tmdb_id" "$season" "$episode" "$imdb_id")
+    [[ -n "$url" ]] && { echo "$url"; return; }
 }
 
 # ── subtitle helper ───────────────────────────────────────────────────────────
@@ -63,7 +86,7 @@ get_subtitle_url() {
     local tmdb_id="$1" season="$2" episode="$3"
     local ct_file; ct_file=$(mktemp /tmp/krono_ct.XXXXXX)
     curl -s -A "Mozilla/5.0" -H "Origin: $VIDKING_REF" -H "Referer: $VIDKING_REF" \
-        "${VIDEASY_BASE}?tmdbId=${tmdb_id}&seasonId=${season}&episodeId=${episode}&mediaType=tv" \
+        "${VIDEASY_API}/cdn/sources-with-title?tmdbId=${tmdb_id}&seasonId=${season}&episodeId=${episode}&mediaType=tv" \
         -o "$ct_file" 2>/dev/null
     local result
     result=$(node "$SCRIPT_DIR/decrypt.js" "$ct_file" "$tmdb_id" 2>/dev/null)
@@ -117,7 +140,7 @@ play_episode() {
         info "Fetching stream for ${show_name} S${season}E${ep}..."
         local stream_url
         stream_url=$(get_stream_url "$tmdb_id" "$season" "$ep")
-        [[ -z "$stream_url" ]] && die "No stream URL found"
+        [[ -z "$stream_url" ]] && die "No stream URL found — episode may not be available on any source"
 
         local sub_url
         sub_url=$(get_subtitle_url "$tmdb_id" "$season" "$ep")
