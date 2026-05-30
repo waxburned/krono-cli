@@ -2,7 +2,7 @@ import sys, re, html
 
 content = sys.stdin.read()
 blocks = re.findall(
-    r'href="/tv/(\d+)-[^"]*".*?<span>([^<]+)</span>.*?class="release_date[^"]*">([^<]+)',
+    r'href="/tv/(\d+)(?:-[^"]*)?\".*?<span>([^<]+)</span>.*?class="release_date[^"]*">([^<]+)',
     content, re.DOTALL)
 seen = set()
 for tmdb_id, name, date in blocks:
