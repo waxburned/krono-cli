@@ -2,7 +2,7 @@
 
 > **Disclaimer:** krono-cli is intended for educational purposes only. It does not host or distribute any content. All streams are sourced from third-party services. Use at your own risk and in accordance with the laws of your country.
 
-A CLI tool to stream and track TV shows from your terminal, inspired by [ani-cli](https://github.com/pystardust/ani-cli).
+A CLI tool to stream and track TV shows and movies from your terminal, inspired by [ani-cli](https://github.com/pystardust/ani-cli).
 
 ## Platform Support
 
@@ -10,7 +10,7 @@ A CLI tool to stream and track TV shows from your terminal, inspired by [ani-cli
 |---|---|
 | Linux | ✅ Fully supported |
 | macOS | ✅ Should work (install deps via homebrew) |
-| Windows | ❌ Not supported (bash script, no native Windows shell) |
+| Windows | ✅ Supported via Git Bash (see [windows branch](https://github.com/waxburned/krono-cli/tree/windows)) |
 
 ## Dependencies
 
@@ -32,7 +32,8 @@ ln -s "$PWD/krono-cli" ~/.local/bin/krono-cli
 ## Usage
 
 ```bash
-krono-cli "Breaking Bad"     # search and stream
+krono-cli Breaking Bad       # search and stream a TV show
+krono-cli --movie Inception  # search and stream a movie
 krono-cli --list             # show tracked shows
 krono-cli --remove <tmdb_id> # remove from history
 ```
