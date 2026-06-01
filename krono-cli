@@ -16,7 +16,7 @@ mkdir -p "$(dirname "$HISTORY_FILE")"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 die()  { printf '\e[31mERROR\e[0m: %s\n' "$*" >&2; exit 1; }
-info() { printf '\e[36m→\e[0m %s\n' "$*"; }
+info() { printf '\e[36m→\e[0m %s\n' "$*" >&2; }
 dep_check() {
     for d in fzf mpv node curl python3; do
         command -v "$d" &>/dev/null || die "Missing dependency: $d"
