@@ -31,13 +31,24 @@ tmdb_search() {
     curl -s \
         -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" \
         "https://www.themoviedb.org/search/tv?query=${encoded_query}" \
-    | python3 "$SCRIPT_DIR/tmdb_search.py"
+    | python3 "$SCRIPT_DIR/tmdb_search.py" tv
+}
+
+tmdb_movie_search() {
+    local query="$1"
+    local encoded_query
+    encoded_query=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$query")
+    curl -s \
+        -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" \
+        "https://www.themoviedb.org/search/movie?query=${encoded_query}" \
+    | python3 "$SCRIPT_DIR/tmdb_search.py" movie
 }
 
 # ── fetch & decrypt stream ────────────────────────────────────────────────────
 _fetch_stream() {
-    local provider="$1" tmdb_id="$2" season="$3" episode="$4" imdb_id="$5"
-    local params="tmdbId=${tmdb_id}&seasonId=${season}&episodeId=${episode}&mediaType=tv"
+    local provider="$1" tmdb_id="$2" media_type="$3" season="$4" episode="$5" imdb_id="$6"
+    local params="tmdbId=${tmdb_id}&mediaType=${media_type}"
+    [[ "$media_type" == "tv" ]] && params+="&seasonId=${season}&episodeId=${episode}"
     [[ -n "$imdb_id" ]] && params+="&imdbId=${imdb_id}"
 
     local ct_file; ct_file=$(mktemp /tmp/krono_ct.XXXXXX)
@@ -59,7 +70,8 @@ _fetch_stream() {
 }
 
 get_imdb_id() {
-    curl -s -A "Mozilla/5.0" "https://www.themoviedb.org/tv/$1" 2>/dev/null \
+    local tmdb_id="$1" media_type="${2:-tv}"
+    curl -s -A "Mozilla/5.0" "https://www.themoviedb.org/${media_type}/${tmdb_id}" 2>/dev/null \
         | python3 -c "
 import sys, re
 m = re.search(r'href=\"https://www\.imdb\.com/title/(tt[0-9]+)', sys.stdin.read())
@@ -71,22 +83,38 @@ get_stream_url() {
     local tmdb_id="$1" season="$2" episode="$3"
 
     local url
-    url=$(_fetch_stream "cdn" "$tmdb_id" "$season" "$episode" "")
+    url=$(_fetch_stream "cdn" "$tmdb_id" "tv" "$season" "$episode" "")
     [[ -n "$url" ]] && { echo "$url"; return; }
 
     info "Primary source unavailable, trying alternate source..."
     local imdb_id
-    imdb_id=$(get_imdb_id "$tmdb_id")
-    url=$(_fetch_stream "e3b0c442" "$tmdb_id" "$season" "$episode" "$imdb_id")
+    imdb_id=$(get_imdb_id "$tmdb_id" "tv")
+    url=$(_fetch_stream "e3b0c442" "$tmdb_id" "tv" "$season" "$episode" "$imdb_id")
+    [[ -n "$url" ]] && { echo "$url"; return; }
+}
+
+get_movie_stream_url() {
+    local tmdb_id="$1"
+
+    local url
+    url=$(_fetch_stream "cdn" "$tmdb_id" "movie" "" "" "")
+    [[ -n "$url" ]] && { echo "$url"; return; }
+
+    info "Primary source unavailable, trying alternate source..."
+    local imdb_id
+    imdb_id=$(get_imdb_id "$tmdb_id" "movie")
+    url=$(_fetch_stream "e3b0c442" "$tmdb_id" "movie" "" "" "$imdb_id")
     [[ -n "$url" ]] && { echo "$url"; return; }
 }
 
 # ── subtitle helper ───────────────────────────────────────────────────────────
 get_subtitle_url() {
-    local tmdb_id="$1" season="$2" episode="$3"
+    local tmdb_id="$1" season="$2" episode="$3" media_type="${4:-tv}"
+    local params="tmdbId=${tmdb_id}&mediaType=${media_type}"
+    [[ "$media_type" == "tv" ]] && params+="&seasonId=${season}&episodeId=${episode}"
     local ct_file; ct_file=$(mktemp /tmp/krono_ct.XXXXXX)
     curl -s -A "Mozilla/5.0" -H "Origin: $VIDKING_REF" -H "Referer: $VIDKING_REF" \
-        "${VIDEASY_API}/cdn/sources-with-title?tmdbId=${tmdb_id}&seasonId=${season}&episodeId=${episode}&mediaType=tv" \
+        "${VIDEASY_API}/cdn/sources-with-title?${params}" \
         -o "$ct_file" 2>/dev/null
     local result
     result=$(node "$SCRIPT_DIR/decrypt.js" "$ct_file" "$tmdb_id" 2>/dev/null)
@@ -114,6 +142,30 @@ history_del() {
     local tmp; tmp=$(mktemp)
     grep -v "^${1}"$'\t' "$HISTORY_FILE" > "$tmp"
     mv "$tmp" "$HISTORY_FILE"
+}
+
+# ── play movie ───────────────────────────────────────────────────────────────
+play_movie() {
+    local tmdb_id="$1" movie_name="$2"
+
+    info "Fetching stream for ${movie_name}..."
+    local stream_url
+    stream_url=$(get_movie_stream_url "$tmdb_id")
+    [[ -z "$stream_url" ]] && die "No stream URL found — movie may not be available on any source"
+
+    local sub_url
+    sub_url=$(get_subtitle_url "$tmdb_id" "" "" "movie")
+
+    local sub_flag=()
+    [[ -n "$sub_url" ]] && sub_flag=(--sub-file="$sub_url")
+
+    info "Playing ${movie_name}..."
+    "$PLAYER" \
+        --force-media-title="${movie_name}" \
+        --referrer="$VIDKING_REF" \
+        --msg-level=ffmpeg/demuxer=no \
+        "${sub_flag[@]}" \
+        "$stream_url"
 }
 
 # ── countdown to next episode ─────────────────────────────────────────────────
@@ -223,6 +275,27 @@ cmd_remove() {
     info "Removed $1 from history"
 }
 
+cmd_movie() {
+    local query="$*"
+    [[ -z "$query" ]] && read -rp "Search movie: " query
+    [[ -z "$query" ]] && exit 0
+
+    info "Searching for '${query}'..."
+    local results
+    results=$(tmdb_movie_search "$query")
+    [[ -z "$results" ]] && die "No results found"
+
+    local chosen
+    chosen=$(echo "$results" | fzf --prompt="Select movie: " --height=20 --reverse --delimiter=$'\t' --with-nth=2)
+    [[ -z "$chosen" ]] && exit 0
+
+    local tmdb_id movie_name
+    tmdb_id=$(echo "$chosen" | cut -f1)
+    movie_name=$(echo "$chosen" | cut -f2)
+
+    play_movie "$tmdb_id" "$movie_name"
+}
+
 cmd_search() {
     local query="$*"
     [[ -z "$query" ]] && read -rp "Search: " query
@@ -276,12 +349,14 @@ dep_check
 case "$1" in
     --list|-l)    cmd_list ;;
     --remove|-r)  cmd_remove "$2" ;;
+    --movie|-m)   cmd_movie "${@:2}" ;;
     --help|-h)
         cat << 'EOF'
-krono-cli — stream and track TV shows
+krono-cli — stream and track TV shows and movies
 
 Usage:
-  krono-cli [show name]         Search and stream a show
+  krono-cli [show name]         Search and stream a TV show
+  krono-cli --movie [title]     Search and stream a movie
   krono-cli --list              Show tracked progress
   krono-cli --remove <tmdb_id>  Remove a show from history
 

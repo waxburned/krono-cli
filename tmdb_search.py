@@ -1,8 +1,9 @@
 import sys, re, html
 
+media_type = sys.argv[1] if len(sys.argv) > 1 else "tv"
 content = sys.stdin.read()
 blocks = re.findall(
-    r'href="/tv/(\d+)(?:-[^"]*)?\".*?<span>([^<]+)</span>.*?class="release_date[^"]*">([^<]+)',
+    r'href="/' + re.escape(media_type) + r'/(\d+)(?:-[^"]*)?\".*?<span>([^<]+)</span>.*?class="release_date[^"]*">([^<]+)',
     content, re.DOTALL)
 seen = set()
 for tmdb_id, name, date in blocks:
