@@ -165,7 +165,9 @@ play_movie() {
     rm -f "$proxy_ready"
     local proxy_ready_native
     proxy_ready_native=$(cygpath -w "$proxy_ready" 2>/dev/null || echo "$proxy_ready")
-    python3 "$SCRIPT_DIR/stream_proxy.py" "$stream_url" "$proxy_ready_native" &
+    local curl_bin_native
+    curl_bin_native=$(cygpath -w "$(command -v curl)" 2>/dev/null || echo "curl")
+    python3 "$SCRIPT_DIR/stream_proxy.py" "$stream_url" "$proxy_ready_native" "$curl_bin_native" &
     local proxy_pid=$!
 
     local i=0

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""HLS proxy: fetches stream via curl (WinSSL) to bypass CDN TLS fingerprint blocking."""
+"""HLS proxy: fetches stream via curl to bypass CDN TLS fingerprint blocking."""
 import sys, subprocess, socket, threading, re, time, os
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
@@ -7,21 +7,9 @@ from urllib.parse import urljoin, quote, unquote
 
 BASE_URL = sys.argv[1]
 READY_FILE = sys.argv[2] if len(sys.argv) > 2 else None
+# argv[3]: explicit curl binary path passed from bash (the one confirmed to work)
+CURL_BIN = sys.argv[3] if len(sys.argv) > 3 else 'curl'
 
-def _find_curl():
-    if sys.platform == 'win32':
-        # Use Scoop's actual curl binary (bypass shim which deadlocks with pipes)
-        # Scoop's curl uses the correct TLS backend accepted by the CDN
-        scoop_curl = os.path.join(os.path.expanduser('~'), 'scoop', 'apps', 'curl', 'current', 'bin', 'curl.exe')
-        if os.path.isfile(scoop_curl):
-            return scoop_curl
-        # Fall back to Windows built-in (may be blocked by some CDNs)
-        system_curl = r'C:\Windows\System32\curl.exe'
-        if os.path.isfile(system_curl):
-            return system_curl
-    return 'curl'
-
-CURL_BIN = _find_curl()
 CURL = [
     CURL_BIN, '-s', '-L', '--max-time', '30',
     '-A', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -95,7 +83,7 @@ def main():
     proxy_url = f'http://127.0.0.1:{PORT}/stream.m3u8'
     print(f'[proxy] port={PORT} curl={CURL_BIN}', file=sys.stderr, flush=True)
     if READY_FILE:
-        with open(READY_FILE, 'wb') as f:  # binary mode avoids Windows CRLF
+        with open(READY_FILE, 'wb') as f:
             f.write(proxy_url.encode())
     else:
         print(proxy_url, flush=True)
