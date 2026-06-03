@@ -64,6 +64,7 @@ class Handler(BaseHTTPRequestHandler):
             print(f'[proxy] fetch error: {e}', file=sys.stderr, flush=True)
             self.send_error(502)
             return
+        print(f'[proxy] got {len(data)} bytes, first: {data[:60]!r}', file=sys.stderr, flush=True)
         if data[:7] == b'#EXTM3U' or b'#EXT-X-' in data[:200]:
             data = rewrite_m3u8(data, url)
             ct = 'application/vnd.apple.mpegurl'
