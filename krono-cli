@@ -159,13 +159,31 @@ play_movie() {
     local sub_flag=()
     [[ -n "$sub_url" ]] && sub_flag=(--sub-file="$sub_url")
 
+    # CDN blocks mpv's OpenSSL TLS fingerprint but allows curl (WinSSL).
+    # Route the stream through a local curl-based proxy so mpv connects over plain HTTP.
+    local proxy_ready; proxy_ready=$(mktemp)
+    rm -f "$proxy_ready"
+    python3 "$SCRIPT_DIR/stream_proxy.py" "$stream_url" "$proxy_ready" &
+    local proxy_pid=$!
+
+    local i=0
+    while [[ ! -f "$proxy_ready" && $i -lt 10 ]]; do sleep 1; (( i++ )); done
+    if [[ ! -f "$proxy_ready" ]]; then
+        kill "$proxy_pid" 2>/dev/null
+        die "Failed to start stream proxy"
+    fi
+    local proxy_url; proxy_url=$(cat "$proxy_ready")
+    rm -f "$proxy_ready"
+
     info "Playing ${movie_name}..."
     "$PLAYER" \
         --force-media-title="${movie_name}" \
-        --referrer="$VIDKING_REF" \
         --msg-level=ffmpeg/demuxer=no \
         "${sub_flag[@]}" \
-        "$stream_url"
+        "$proxy_url"
+
+    kill "$proxy_pid" 2>/dev/null
+    wait "$proxy_pid" 2>/dev/null
 }
 
 # ── countdown to next episode ─────────────────────────────────────────────────
