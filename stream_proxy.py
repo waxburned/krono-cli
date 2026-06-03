@@ -1,27 +1,25 @@
 #!/usr/bin/env python3
-"""HLS proxy: fetches stream via curl to bypass CDN TLS fingerprint blocking."""
-import sys, subprocess, socket, threading, re, time, os
+"""HLS proxy: fetches stream via Python urllib to bypass mpv's CDN TLS blocking."""
+import sys, urllib.request, socket, threading, re, time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 from urllib.parse import urljoin, quote, unquote
 
 BASE_URL = sys.argv[1]
 READY_FILE = sys.argv[2] if len(sys.argv) > 2 else None
-# argv[3]: explicit curl binary path passed from bash (the one confirmed to work)
-CURL_BIN = sys.argv[3] if len(sys.argv) > 3 else 'curl'
 
-CURL = [
-    CURL_BIN, '-s', '-L', '--max-time', '30',
-    '-A', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    '-H', 'Referer: https://player.videasy.net/',
-    '-H', 'Origin: https://player.videasy.net',
-]
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Referer': 'https://player.videasy.net/',
+    'Origin': 'https://player.videasy.net',
+}
 
 PORT = None
 
 def fetch(url):
-    r = subprocess.run(CURL + [url], capture_output=True, timeout=35, stdin=subprocess.DEVNULL)
-    return r.stdout
+    req = urllib.request.Request(url, headers=HEADERS)
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return r.read()
 
 def rewrite_m3u8(data, src_url):
     lines = []
@@ -50,10 +48,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             data = fetch(url)
         except Exception as e:
-            print(f'[proxy] fetch error: {e}', file=sys.stderr, flush=True)
+            print(f'[proxy] error: {type(e).__name__}: {e}', file=sys.stderr, flush=True)
             self.send_error(502)
             return
-        print(f'[proxy] got {len(data)} bytes, first: {data[:60]!r}', file=sys.stderr, flush=True)
+        print(f'[proxy] {len(data)}b first={data[:50]!r}', file=sys.stderr, flush=True)
         if data[:7] == b'#EXTM3U' or b'#EXT-X-' in data[:200]:
             data = rewrite_m3u8(data, url)
             ct = 'application/vnd.apple.mpegurl'
@@ -81,7 +79,7 @@ def main():
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     proxy_url = f'http://127.0.0.1:{PORT}/stream.m3u8'
-    print(f'[proxy] port={PORT} curl={CURL_BIN}', file=sys.stderr, flush=True)
+    print(f'[proxy] port={PORT} method=urllib', file=sys.stderr, flush=True)
     if READY_FILE:
         with open(READY_FILE, 'wb') as f:
             f.write(proxy_url.encode())
