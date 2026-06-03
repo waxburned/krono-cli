@@ -162,7 +162,8 @@ play_movie() {
     info "Playing ${movie_name}..."
     "$PLAYER" \
         --force-media-title="${movie_name}" \
-        --referrer="$VIDKING_REF" \
+        --referrer="https://player.videasy.net/" \
+        --http-header-fields="Origin: https://player.videasy.net" \
         --msg-level=ffmpeg/demuxer=no \
         "${sub_flag[@]}" \
         "$stream_url"
