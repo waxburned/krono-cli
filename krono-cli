@@ -95,12 +95,19 @@ get_stream_url() {
 
 get_movie_stream_url() {
     local tmdb_id="$1"
+    local url bytes
 
-    local url
+    # cdn provider movies require browser cookies — validate before using
     url=$(_fetch_stream "cdn" "$tmdb_id" "movie" "" "" "")
-    [[ -n "$url" ]] && { echo "$url"; return; }
+    if [[ -n "$url" ]]; then
+        bytes=$(curl -s -A "Mozilla/5.0" \
+            -H "Referer: https://player.videasy.net/" \
+            -H "Origin: https://player.videasy.net" \
+            --max-time 5 "$url" 2>/dev/null | wc -c)
+        [[ "${bytes:-0}" -gt 5 ]] && { echo "$url"; return; }
+        info "Primary source requires browser session, trying alternate..."
+    fi
 
-    info "Primary source unavailable, trying alternate source..."
     local imdb_id
     imdb_id=$(get_imdb_id "$tmdb_id" "movie")
     url=$(_fetch_stream "e3b0c442" "$tmdb_id" "movie" "" "" "$imdb_id")
@@ -159,44 +166,13 @@ play_movie() {
     local sub_flag=()
     [[ -n "$sub_url" ]] && sub_flag=(--sub-file="$sub_url")
 
-    # Diagnostic: verify bash curl can actually fetch stream body
-    local curl_body
-    curl_body=$(curl -s -L \
-        -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-        -H "Referer: https://player.videasy.net/" \
-        -H "Origin: https://player.videasy.net" \
-        --max-time 15 "$stream_url" 2>/dev/null | head -c 100)
-    info "Curl body test: '${curl_body:0:80}'"
-
-    # CDN blocks mpv's OpenSSL TLS fingerprint but allows curl (WinSSL).
-    # Route the stream through a local curl-based proxy so mpv connects over plain HTTP.
-    local proxy_ready; proxy_ready=$(mktemp)
-    rm -f "$proxy_ready"
-    local proxy_ready_native
-    proxy_ready_native=$(cygpath -w "$proxy_ready" 2>/dev/null || echo "$proxy_ready")
-    local curl_bin_native
-    curl_bin_native=$(cygpath -w "$(command -v curl)" 2>/dev/null || echo "curl")
-    python3 "$SCRIPT_DIR/stream_proxy.py" "$stream_url" "$proxy_ready_native" "$curl_bin_native" &
-    local proxy_pid=$!
-
-    local i=0
-    while [[ ! -f "$proxy_ready" && $i -lt 10 ]]; do sleep 1; (( i++ )); done
-    if [[ ! -f "$proxy_ready" ]]; then
-        kill "$proxy_pid" 2>/dev/null
-        die "Failed to start stream proxy"
-    fi
-    local proxy_url; proxy_url=$(tr -d '\r' < "$proxy_ready")
-    rm -f "$proxy_ready"
-
     info "Playing ${movie_name}..."
     "$PLAYER" \
         --force-media-title="${movie_name}" \
+        --referrer="$VIDKING_REF" \
         --msg-level=ffmpeg/demuxer=no \
         "${sub_flag[@]}" \
-        "$proxy_url"
-
-    kill "$proxy_pid" 2>/dev/null
-    wait "$proxy_pid" 2>/dev/null
+        "$stream_url"
 }
 
 # ── countdown to next episode ─────────────────────────────────────────────────
