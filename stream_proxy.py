@@ -10,14 +10,15 @@ READY_FILE = sys.argv[2] if len(sys.argv) > 2 else None
 
 def _find_curl():
     if sys.platform == 'win32':
-        # Use Windows built-in curl.exe directly (WinSSL, no Scoop shim)
+        # Use Scoop's actual curl binary (bypass shim which deadlocks with pipes)
+        # Scoop's curl uses the correct TLS backend accepted by the CDN
+        scoop_curl = os.path.join(os.path.expanduser('~'), 'scoop', 'apps', 'curl', 'current', 'bin', 'curl.exe')
+        if os.path.isfile(scoop_curl):
+            return scoop_curl
+        # Fall back to Windows built-in (may be blocked by some CDNs)
         system_curl = r'C:\Windows\System32\curl.exe'
         if os.path.isfile(system_curl):
             return system_curl
-        # Fall back to Scoop's actual binary (skip shim)
-        scoop_curl = os.path.expanduser(r'~\scoop\apps\curl\current\bin\curl.exe')
-        if os.path.isfile(scoop_curl):
-            return scoop_curl
     return 'curl'
 
 CURL_BIN = _find_curl()
@@ -31,7 +32,7 @@ CURL = [
 PORT = None
 
 def fetch(url):
-    r = subprocess.run(CURL + [url], capture_output=True, timeout=35)
+    r = subprocess.run(CURL + [url], capture_output=True, timeout=35, stdin=subprocess.DEVNULL)
     return r.stdout
 
 def rewrite_m3u8(data, src_url):
