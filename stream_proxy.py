@@ -1,14 +1,28 @@
 #!/usr/bin/env python3
 """HLS proxy: fetches stream via curl (WinSSL) to bypass CDN TLS fingerprint blocking."""
-import sys, subprocess, socket, threading, re, time
+import sys, subprocess, socket, threading, re, time, os
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 from urllib.parse import urljoin, quote, unquote
 
 BASE_URL = sys.argv[1]
 READY_FILE = sys.argv[2] if len(sys.argv) > 2 else None
 
+def _find_curl():
+    if sys.platform == 'win32':
+        # Use Windows built-in curl.exe directly (WinSSL, no Scoop shim)
+        system_curl = r'C:\Windows\System32\curl.exe'
+        if os.path.isfile(system_curl):
+            return system_curl
+        # Fall back to Scoop's actual binary (skip shim)
+        scoop_curl = os.path.expanduser(r'~\scoop\apps\curl\current\bin\curl.exe')
+        if os.path.isfile(scoop_curl):
+            return scoop_curl
+    return 'curl'
+
+CURL_BIN = _find_curl()
 CURL = [
-    'curl', '-s', '-L',
+    CURL_BIN, '-s', '-L', '--max-time', '30',
     '-A', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     '-H', 'Referer: https://player.videasy.net/',
     '-H', 'Origin: https://player.videasy.net',
@@ -17,7 +31,7 @@ CURL = [
 PORT = None
 
 def fetch(url):
-    r = subprocess.run(CURL + [url], capture_output=True, timeout=60)
+    r = subprocess.run(CURL + [url], capture_output=True, timeout=35)
     return r.stdout
 
 def rewrite_m3u8(data, src_url):
@@ -44,7 +58,12 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_error(404)
             return
-        data = fetch(url)
+        try:
+            data = fetch(url)
+        except Exception as e:
+            print(f'[proxy] fetch error: {e}', file=sys.stderr, flush=True)
+            self.send_error(502)
+            return
         if data[:7] == b'#EXTM3U' or b'#EXT-X-' in data[:200]:
             data = rewrite_m3u8(data, url)
             ct = 'application/vnd.apple.mpegurl'
@@ -56,8 +75,11 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def log_message(self, *a):
-        pass
+    def log_message(self, fmt, *args):
+        print(f'[proxy] {self.path[:80]}', file=sys.stderr, flush=True)
+
+class ThreadedServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
 
 def main():
     global PORT
@@ -65,13 +87,14 @@ def main():
         s.bind(('127.0.0.1', 0))
         PORT = s.getsockname()[1]
 
-    server = HTTPServer(('127.0.0.1', PORT), Handler)
+    server = ThreadedServer(('127.0.0.1', PORT), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     proxy_url = f'http://127.0.0.1:{PORT}/stream.m3u8'
+    print(f'[proxy] port={PORT} curl={CURL_BIN}', file=sys.stderr, flush=True)
     if READY_FILE:
-        with open(READY_FILE, 'w') as f:
-            f.write(proxy_url)
+        with open(READY_FILE, 'wb') as f:  # binary mode avoids Windows CRLF
+            f.write(proxy_url.encode())
     else:
         print(proxy_url, flush=True)
 

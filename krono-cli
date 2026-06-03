@@ -163,7 +163,9 @@ play_movie() {
     # Route the stream through a local curl-based proxy so mpv connects over plain HTTP.
     local proxy_ready; proxy_ready=$(mktemp)
     rm -f "$proxy_ready"
-    python3 "$SCRIPT_DIR/stream_proxy.py" "$stream_url" "$proxy_ready" &
+    local proxy_ready_native
+    proxy_ready_native=$(cygpath -w "$proxy_ready" 2>/dev/null || echo "$proxy_ready")
+    python3 "$SCRIPT_DIR/stream_proxy.py" "$stream_url" "$proxy_ready_native" &
     local proxy_pid=$!
 
     local i=0
@@ -172,7 +174,7 @@ play_movie() {
         kill "$proxy_pid" 2>/dev/null
         die "Failed to start stream proxy"
     fi
-    local proxy_url; proxy_url=$(cat "$proxy_ready")
+    local proxy_url; proxy_url=$(tr -d '\r' < "$proxy_ready")
     rm -f "$proxy_ready"
 
     info "Playing ${movie_name}..."
