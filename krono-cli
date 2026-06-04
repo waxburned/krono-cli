@@ -171,6 +171,7 @@ play_movie() {
         --force-media-title="${movie_name}" \
         --referrer="$VIDKING_REF" \
         --msg-level=ffmpeg/demuxer=no \
+        --sub-visibility=yes \
         "${sub_flag[@]}" \
         "$stream_url"
 }
@@ -217,6 +218,7 @@ play_episode() {
             --referrer="$VIDKING_REF" \
             --script="$SCRIPT_DIR/eof_detect.lua" \
             --msg-level=ffmpeg/demuxer=no \
+            --sub-visibility=yes \
             "${start_flag[@]}" \
             "${sub_flag[@]}" \
             "$stream_url"
