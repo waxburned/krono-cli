@@ -68,7 +68,7 @@ _fetch_stream() {
         -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
         -H "Origin: https://player.videasy.net" \
         -H "Referer: https://player.videasy.net/" \
-        -H "x-app-id: videasy" \
+        -H "x-app-id: cb-frontend" \
         "${session_flag[@]}" \
         "${VIDEASY_API}/${provider}/sources-with-title?${params}" \
         -o "$ct_file" 2>/dev/null || { rm -f "$ct_file"; return 1; }
@@ -118,15 +118,13 @@ get_stream_url() {
     imdb_id=$(get_imdb_id "$tmdb_id" "tv")
 
     local url
-    url=$(_fetch_stream "mb-flix" "$tmdb_id" "tv" "$season" "$episode" "$imdb_id" "$title" "$year")
-    [[ -n "$url" ]] && { echo "$url"; return; }
-
-    info "Primary source unavailable, trying alternate source..."
-    url=$(_fetch_stream "cdn" "$tmdb_id" "tv" "$season" "$episode" "")
-    [[ -n "$url" ]] && { echo "$url"; return; }
-
-    url=$(_fetch_stream "e3b0c442" "$tmdb_id" "tv" "$season" "$episode" "$imdb_id")
-    [[ -n "$url" ]] && { echo "$url"; return; }
+    for provider in mb-flix downloader2 superflix 1movies cdn m4uhd lamovie e3b0c442; do
+        url=$(_fetch_stream "$provider" "$tmdb_id" "tv" "$season" "$episode" "$imdb_id" "$title" "$year")
+        if [[ -n "$url" ]]; then
+            [[ "${KRONO_DEBUG:-0}" == "1" ]] && info "[debug] provider: $provider"
+            echo "$url"; return
+        fi
+    done
 }
 
 get_movie_stream_url() {
@@ -139,23 +137,13 @@ get_movie_stream_url() {
     imdb_id=$(get_imdb_id "$tmdb_id" "movie")
 
     local url
-    url=$(_fetch_stream "mb-flix" "$tmdb_id" "movie" "" "" "$imdb_id" "$title" "$year")
-    [[ -n "$url" ]] && { echo "$url"; return; }
-
-    info "Primary source unavailable, trying alternate source..."
-    local bytes
-    url=$(_fetch_stream "cdn" "$tmdb_id" "movie" "" "" "")
-    if [[ -n "$url" ]]; then
-        bytes=$(curl -s -A "Mozilla/5.0" \
-            -H "Referer: https://player.videasy.net/" \
-            -H "Origin: https://player.videasy.net" \
-            --max-time 5 "$url" 2>/dev/null | wc -c)
-        [[ "${bytes:-0}" -gt 5 ]] && { echo "$url"; return; }
-        info "cdn source requires browser session, trying e3b0c442..."
-    fi
-
-    url=$(_fetch_stream "e3b0c442" "$tmdb_id" "movie" "" "" "$imdb_id")
-    [[ -n "$url" ]] && { echo "$url"; return; }
+    for provider in mb-flix cdn downloader2 superflix 1movies m4uhd lamovie e3b0c442; do
+        url=$(_fetch_stream "$provider" "$tmdb_id" "movie" "" "" "$imdb_id" "$title" "$year")
+        if [[ -n "$url" ]]; then
+            [[ "${KRONO_DEBUG:-0}" == "1" ]] && info "[debug] provider: $provider"
+            echo "$url"; return
+        fi
+    done
 }
 
 # ── subtitle helper ───────────────────────────────────────────────────────────
@@ -174,7 +162,7 @@ get_subtitle_url() {
         -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
         -H "Origin: https://player.videasy.net" \
         -H "Referer: https://player.videasy.net/" \
-        -H "x-app-id: videasy" \
+        -H "x-app-id: cb-frontend" \
         "${session_flag[@]}" \
         "${VIDEASY_API}/cdn/sources-with-title?${params}" \
         -o "$ct_file" 2>/dev/null
