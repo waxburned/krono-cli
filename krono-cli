@@ -48,7 +48,8 @@ tmdb_movie_search() {
 _fetch_stream() {
     local provider="$1" tmdb_id="$2" media_type="$3" season="$4" episode="$5" imdb_id="$6" title="$7" year="$8"
     local params="tmdbId=${tmdb_id}&mediaType=${media_type}"
-    [[ "$media_type" == "tv" ]] && params+="&seasonId=${season}&episodeId=${episode}"
+    local sid="${season:-1}" eid="${episode:-1}"
+    params+="&seasonId=${sid}&episodeId=${eid}"
     [[ -n "$imdb_id" ]] && params+="&imdbId=${imdb_id}"
     if [[ -n "$title" ]]; then
         local enc_title
