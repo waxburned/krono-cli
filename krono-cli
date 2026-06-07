@@ -78,10 +78,13 @@ _fetch_stream() {
     url=$(echo "$result" | python3 "$SCRIPT_DIR/parse_stream.py")
     [[ -z "$url" ]] && return 1
 
-    # Verify the CDN hostname resolves before returning
-    local host
-    host=$(python3 -c "import sys,urllib.parse; print(urllib.parse.urlparse(sys.argv[1]).hostname)" "$url" 2>/dev/null)
-    python3 -c "import socket,sys; socket.getaddrinfo(sys.argv[1],80)" "$host" 2>/dev/null || return 1
+    # Verify the URL actually responds before returning
+    local status
+    status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 6 \
+        -H "Referer: $CINEBY_REF" \
+        -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) Gecko/20100101 Firefox/151.0" \
+        "$url" 2>/dev/null)
+    [[ "$status" =~ ^(200|206|301|302)$ ]] || return 1
 
     echo "$url"
 }
@@ -117,7 +120,7 @@ get_stream_url() {
     imdb_id=$(get_imdb_id "$tmdb_id" "tv")
 
     local url
-    for provider in cdn downloader2 mb-flix superflix 1movies m4uhd lamovie e3b0c442; do
+    for provider in downloader2 mb-flix superflix 1movies m4uhd lamovie e3b0c442; do
         url=$(_fetch_stream "$provider" "$tmdb_id" "tv" "$season" "$episode" "$imdb_id" "$title" "$year")
         if [[ -n "$url" ]]; then
             [[ "${KRONO_DEBUG:-0}" == "1" ]] && info "[debug] provider: $provider"
@@ -208,8 +211,8 @@ play_movie() {
         --msg-level=ffmpeg/demuxer=no \
         --sub-visibility=yes \
         --cache=yes \
-        --demuxer-max-bytes=50MiB \
-        --demuxer-readahead-secs=30 \
+        --demuxer-max-bytes=20MiB \
+        --demuxer-readahead-secs=15 \
         "${sub_flag[@]}" \
         "$stream_url"
 }
