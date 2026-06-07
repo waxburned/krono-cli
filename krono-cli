@@ -6,8 +6,8 @@
 SCRIPT_DIR="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)"
 HISTORY_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/krono-cli/history.tsv"
 SESSION_CACHE="${XDG_STATE_HOME:-$HOME/.local/state}/krono-cli/session.json"
-VIDEASY_API="https://api.videasy.net"
-VIDKING_REF="https://www.vidking.net/"
+VIDEASY_API="https://api.videasy.to"
+CINEBY_REF="https://www.cineby.at/"
 PLAYER="${KRONO_PLAYER:-mpv}"
 QUALITY="${KRONO_QUALITY:-1080p}"
 
@@ -58,19 +58,11 @@ _fetch_stream() {
     fi
     [[ -n "$year" ]] && params+="&year=${year}"
 
-    local session_token
-    session_token=$(python3 "$SCRIPT_DIR/get_session.py" 2>/dev/null)
-
-    local session_flag=()
-    [[ -n "$session_token" ]] && session_flag=(-H "x-session-token: $session_token")
-
     local ct_file; ct_file=$(mktemp /tmp/krono_ct.XXXXXX)
     curl -s \
-        -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-        -H "Origin: https://player.videasy.net" \
-        -H "Referer: https://player.videasy.net/" \
-        -H "x-app-id: cb-frontend" \
-        "${session_flag[@]}" \
+        -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) Gecko/20100101 Firefox/151.0" \
+        -H "Origin: $CINEBY_REF" \
+        -H "Referer: $CINEBY_REF" \
         "${VIDEASY_API}/${provider}/sources-with-title?${params}" \
         -o "$ct_file" 2>/dev/null || { rm -f "$ct_file"; return 1; }
 
@@ -153,18 +145,11 @@ get_subtitle_url() {
     local params="tmdbId=${tmdb_id}&mediaType=${media_type}"
     [[ "$media_type" == "tv" ]] && params+="&seasonId=${season}&episodeId=${episode}"
 
-    local session_token
-    session_token=$(python3 "$SCRIPT_DIR/get_session.py" 2>/dev/null)
-    local session_flag=()
-    [[ -n "$session_token" ]] && session_flag=(-H "x-session-token: $session_token")
-
     local ct_file; ct_file=$(mktemp /tmp/krono_ct.XXXXXX)
     curl -s \
-        -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-        -H "Origin: https://player.videasy.net" \
-        -H "Referer: https://player.videasy.net/" \
-        -H "x-app-id: cb-frontend" \
-        "${session_flag[@]}" \
+        -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) Gecko/20100101 Firefox/151.0" \
+        -H "Origin: $CINEBY_REF" \
+        -H "Referer: $CINEBY_REF" \
         "${VIDEASY_API}/cdn/sources-with-title?${params}" \
         -o "$ct_file" 2>/dev/null
     local result
@@ -213,7 +198,7 @@ play_movie() {
     info "Playing ${movie_name}..."
     "$PLAYER" \
         --force-media-title="${movie_name}" \
-        --referrer="$VIDKING_REF" \
+        --referrer="$CINEBY_REF" \
         --msg-level=ffmpeg/demuxer=no \
         --sub-visibility=yes \
         "${sub_flag[@]}" \
@@ -259,7 +244,7 @@ play_episode() {
         local eof_file_native; eof_file_native=$(cygpath -w "$eof_file" 2>/dev/null || echo "$eof_file")
         KRONO_EOF_FILE="$eof_file_native" "$PLAYER" \
             --force-media-title="${show_name} S${season}E${ep}" \
-            --referrer="$VIDKING_REF" \
+            --referrer="$CINEBY_REF" \
             --script="$SCRIPT_DIR/eof_detect.lua" \
             --msg-level=ffmpeg/demuxer=no \
             --sub-visibility=yes \
