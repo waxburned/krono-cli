@@ -117,7 +117,7 @@ get_stream_url() {
     imdb_id=$(get_imdb_id "$tmdb_id" "tv")
 
     local url
-    for provider in downloader2 cdn mb-flix superflix 1movies m4uhd lamovie e3b0c442; do
+    for provider in cdn downloader2 mb-flix superflix 1movies m4uhd lamovie e3b0c442; do
         url=$(_fetch_stream "$provider" "$tmdb_id" "tv" "$season" "$episode" "$imdb_id" "$title" "$year")
         if [[ -n "$url" ]]; then
             [[ "${KRONO_DEBUG:-0}" == "1" ]] && info "[debug] provider: $provider"
@@ -207,6 +207,9 @@ play_movie() {
         --referrer="$CINEBY_REF" \
         --msg-level=ffmpeg/demuxer=no \
         --sub-visibility=yes \
+        --cache=yes \
+        --demuxer-max-bytes=50MiB \
+        --demuxer-readahead-secs=30 \
         "${sub_flag[@]}" \
         "$stream_url"
 }
