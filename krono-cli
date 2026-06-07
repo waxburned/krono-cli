@@ -331,11 +331,11 @@ cmd_set_session() {
     mkdir -p "$(dirname "$SESSION_CACHE")"
     python3 -c "
 import json, time, sys
-data = {'token': sys.argv[1], 'expiresAt': int((time.time() + 3600) * 1000)}
+data = {'token': sys.argv[1], 'expiresAt': int((time.time() + 1500) * 1000)}
 with open(sys.argv[2], 'w') as f:
     json.dump(data, f)
 " "$token" "$SESSION_CACHE"
-    info "Session token saved (valid for ~1 hour)"
+    info "Session token saved (valid for ~25 minutes)"
     info "To refresh: open Cineby → F12 → Network → filter 'auth/session' → copy 'token' value"
 }
 
