@@ -5,11 +5,12 @@
 # ── config ──────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 HISTORY_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/krono-cli/history.tsv"
-TMDB_BASE="https://api.themoviedb.org/3"
-VIDEASY_API="https://api.videasy.net"
-VIDKING_REF="https://www.vidking.net/"
+SESSION_CACHE="${XDG_STATE_HOME:-$HOME/.local/state}/krono-cli/session.json"
+VIDEASY_API="https://api.videasy.to"
+CINEBY_REF="https://www.cineby.at/"
 PLAYER="${KRONO_PLAYER:-mpv}"
 QUALITY="${KRONO_QUALITY:-1080p}"
+PICK_SOURCE=0
 
 mkdir -p "$(dirname "$HISTORY_FILE")"
 [[ ! -f "$HISTORY_FILE" ]] && touch "$HISTORY_FILE"
@@ -44,28 +45,88 @@ tmdb_movie_search() {
     | python3 "$SCRIPT_DIR/tmdb_search.py" movie
 }
 
+# ── URL verification ──────────────────────────────────────────────────────────
+_verify_url() {
+    local url="$1"
+    local verify_tmp; verify_tmp=$(mktemp /tmp/krono_verify.XXXXXX)
+    local status
+    status=$(curl -s --max-time 8 \
+        -H "Referer: $CINEBY_REF" \
+        -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) Gecko/20100101 Firefox/151.0" \
+        -o "$verify_tmp" -w "%{http_code}" \
+        "$url" 2>/dev/null)
+    if ! [[ "$status" =~ ^(200|206|301|302)$ ]]; then
+        rm -f "$verify_tmp"; return 1
+    fi
+    if [[ "$url" == *.m3u8* ]]; then
+        local manifest; manifest=$(cat "$verify_tmp")
+        if ! [[ "$manifest" == *"#EXTM3U"* ]]; then
+            rm -f "$verify_tmp"; return 1
+        fi
+        local child; child=$(printf '%s\n' "$manifest" | grep -v '^#' | grep -v '^$' | head -1)
+        if [[ -n "$child" ]]; then
+            if [[ "$child" != http* ]]; then
+                local base="${url%%\?*}"; base="${base%/*}"
+                child="${base}/${child}"
+            fi
+            local child_status
+            child_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
+                -H "Referer: $CINEBY_REF" \
+                -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) Gecko/20100101 Firefox/151.0" \
+                "$child" 2>/dev/null)
+            [[ "$child_status" =~ ^(200|206)$ ]] || { rm -f "$verify_tmp"; return 1; }
+        fi
+    fi
+    rm -f "$verify_tmp"
+}
+
 # ── fetch & decrypt stream ────────────────────────────────────────────────────
-_fetch_stream() {
-    local provider="$1" tmdb_id="$2" media_type="$3" season="$4" episode="$5" imdb_id="$6"
+_build_params() {
+    local tmdb_id="$1" media_type="$2" season="$3" episode="$4" imdb_id="$5" title="$6" year="$7"
     local params="tmdbId=${tmdb_id}&mediaType=${media_type}"
-    [[ "$media_type" == "tv" ]] && params+="&seasonId=${season}&episodeId=${episode}"
+    local sid="${season:-1}" eid="${episode:-1}"
+    params+="&seasonId=${sid}&episodeId=${eid}"
     [[ -n "$imdb_id" ]] && params+="&imdbId=${imdb_id}"
+    if [[ -n "$title" ]]; then
+        local enc_title
+        enc_title=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$title")
+        params+="&title=${enc_title}"
+    fi
+    [[ -n "$year" ]] && params+="&year=${year}"
+    echo "$params"
+}
+
+_decrypt_response() {
+    local ct_file="$1" tmdb_id="$2"
+    node "$SCRIPT_DIR/decrypt.js" "$ct_file" "$tmdb_id" 2>/dev/null
+}
+
+_fetch_stream() {
+    local provider="$1" tmdb_id="$2" media_type="$3" season="$4" episode="$5" imdb_id="$6" title="$7" year="$8"
+    local params
+    params=$(_build_params "$tmdb_id" "$media_type" "$season" "$episode" "$imdb_id" "$title" "$year")
 
     local ct_file; ct_file=$(mktemp /tmp/krono_ct.XXXXXX)
-
-    curl -s -A "Mozilla/5.0" -H "Origin: $VIDKING_REF" -H "Referer: $VIDKING_REF" \
+    curl -s \
+        -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) Gecko/20100101 Firefox/151.0" \
+        -H "Origin: $CINEBY_REF" \
+        -H "Referer: $CINEBY_REF" \
         "${VIDEASY_API}/${provider}/sources-with-title?${params}" \
         -o "$ct_file" 2>/dev/null || { rm -f "$ct_file"; return 1; }
 
+    [[ "${KRONO_DEBUG:-0}" == "1" ]] && info "[debug] ${provider}: $(head -c 120 "$ct_file")" >&2
+
     local result
-    result=$(node "$SCRIPT_DIR/decrypt.js" "$ct_file" "$tmdb_id" 2>/dev/null)
+    result=$(_decrypt_response "$ct_file" "$tmdb_id")
     rm -f "$ct_file"
 
-    [[ $(echo "$result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('success'))" 2>/dev/null) != "True" ]] && return 1
+    [[ $(printf '%s' "$result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('success'))" 2>/dev/null) != "True" ]] && return 1
 
     local url
-    url=$(echo "$result" | python3 "$SCRIPT_DIR/parse_stream.py")
+    url=$(printf '%s' "$result" | python3 "$SCRIPT_DIR/parse_stream.py")
     [[ -z "$url" ]] && return 1
+
+    _verify_url "$url" || return 1
     echo "$url"
 }
 
@@ -79,32 +140,47 @@ print(m.group(1) if m else '')
 "
 }
 
+# Parse "Show Name (2026)" → sets $title and $year in caller scope
+_parse_name() {
+    local name="$1"
+    year=""
+    title="$name"
+    if [[ "$name" =~ \(([0-9]{4})\)$ ]]; then
+        year="${BASH_REMATCH[1]}"
+        title="${name% \(${year}\)}"
+    fi
+}
+
 get_stream_url() {
-    local tmdb_id="$1" season="$2" episode="$3"
-
-    local url
-    url=$(_fetch_stream "cdn" "$tmdb_id" "tv" "$season" "$episode" "")
-    [[ -n "$url" ]] && { echo "$url"; return; }
-
-    info "Primary source unavailable, trying alternate source..."
+    local tmdb_id="$1" season="$2" episode="$3" show_name="$4"
+    local title year
+    _parse_name "$show_name"
     local imdb_id
     imdb_id=$(get_imdb_id "$tmdb_id" "tv")
-    url=$(_fetch_stream "e3b0c442" "$tmdb_id" "tv" "$season" "$episode" "$imdb_id")
-    [[ -n "$url" ]] && { echo "$url"; return; }
+    local url
+    for provider in cdn downloader2 mb-flix superflix 1movies m4uhd lamovie e3b0c442; do
+        url=$(_fetch_stream "$provider" "$tmdb_id" "tv" "$season" "$episode" "$imdb_id" "$title" "$year")
+        if [[ -n "$url" ]]; then
+            [[ "${KRONO_DEBUG:-0}" == "1" ]] && info "[debug] provider: $provider"
+            echo "$url"; return
+        fi
+    done
 }
 
 get_movie_stream_url() {
-    local tmdb_id="$1"
-
-    local url
-    url=$(_fetch_stream "cdn" "$tmdb_id" "movie" "" "" "")
-    [[ -n "$url" ]] && { echo "$url"; return; }
-
-    info "Primary source unavailable, trying alternate source..."
+    local tmdb_id="$1" movie_name="$2"
+    local title year
+    _parse_name "$movie_name"
     local imdb_id
     imdb_id=$(get_imdb_id "$tmdb_id" "movie")
-    url=$(_fetch_stream "e3b0c442" "$tmdb_id" "movie" "" "" "$imdb_id")
-    [[ -n "$url" ]] && { echo "$url"; return; }
+    local url
+    for provider in mb-flix cdn downloader2 superflix 1movies m4uhd lamovie e3b0c442; do
+        url=$(_fetch_stream "$provider" "$tmdb_id" "movie" "" "" "$imdb_id" "$title" "$year")
+        if [[ -n "$url" ]]; then
+            [[ "${KRONO_DEBUG:-0}" == "1" ]] && info "[debug] provider: $provider"
+            echo "$url"; return
+        fi
+    done
 }
 
 # ── subtitle helper ───────────────────────────────────────────────────────────
@@ -112,14 +188,117 @@ get_subtitle_url() {
     local tmdb_id="$1" season="$2" episode="$3" media_type="${4:-tv}"
     local params="tmdbId=${tmdb_id}&mediaType=${media_type}"
     [[ "$media_type" == "tv" ]] && params+="&seasonId=${season}&episodeId=${episode}"
+    for provider in cdn mb-flix e3b0c442 downloader2 superflix; do
+        local ct_file; ct_file=$(mktemp /tmp/krono_ct.XXXXXX)
+        curl -s \
+            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) Gecko/20100101 Firefox/151.0" \
+            -H "Origin: $CINEBY_REF" \
+            -H "Referer: $CINEBY_REF" \
+            "${VIDEASY_API}/${provider}/sources-with-title?${params}" \
+            -o "$ct_file" 2>/dev/null
+        local result
+        result=$(_decrypt_response "$ct_file" "$tmdb_id")
+        rm -f "$ct_file"
+        local sub_url
+        sub_url=$(printf '%s' "$result" | python3 "$SCRIPT_DIR/parse_sub.py" 2>/dev/null)
+        [[ -n "$sub_url" ]] && echo "$sub_url" && return
+    done
+}
+
+# ── probe provider (stream + subtitle in one API call) ────────────────────────
+# outputs: "stream_url\nsub_url" or nothing if provider unavailable
+_probe_provider() {
+    local provider="$1" tmdb_id="$2" media_type="$3" season="$4" episode="$5" imdb_id="$6" title="$7" year="$8"
+    local params
+    params=$(_build_params "$tmdb_id" "$media_type" "$season" "$episode" "$imdb_id" "$title" "$year")
+
     local ct_file; ct_file=$(mktemp /tmp/krono_ct.XXXXXX)
-    curl -s -A "Mozilla/5.0" -H "Origin: $VIDKING_REF" -H "Referer: $VIDKING_REF" \
-        "${VIDEASY_API}/cdn/sources-with-title?${params}" \
-        -o "$ct_file" 2>/dev/null
+    curl -s \
+        -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) Gecko/20100101 Firefox/151.0" \
+        -H "Origin: $CINEBY_REF" \
+        -H "Referer: $CINEBY_REF" \
+        "${VIDEASY_API}/${provider}/sources-with-title?${params}" \
+        -o "$ct_file" 2>/dev/null || { rm -f "$ct_file"; return 1; }
+
     local result
-    result=$(node "$SCRIPT_DIR/decrypt.js" "$ct_file" "$tmdb_id" 2>/dev/null)
+    result=$(_decrypt_response "$ct_file" "$tmdb_id")
     rm -f "$ct_file"
-    echo "$result" | python3 "$SCRIPT_DIR/parse_sub.py" 2>/dev/null
+
+    [[ $(printf '%s' "$result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('success'))" 2>/dev/null) != "True" ]] && return 1
+
+    local url
+    url=$(printf '%s' "$result" | python3 "$SCRIPT_DIR/parse_stream.py")
+    [[ -z "$url" ]] && return 1
+
+    local sub_url
+    sub_url=$(printf '%s' "$result" | python3 "$SCRIPT_DIR/parse_sub.py" 2>/dev/null)
+
+    _verify_url "$url" || return 1
+
+    printf '%s\n%s\n' "$url" "${sub_url:-}"
+}
+
+# ── interactive source picker ─────────────────────────────────────────────────
+# outputs: "stream_url\nsub_url"
+pick_source() {
+    local tmdb_id="$1" media_type="$2" season="$3" episode="$4" name="$5"
+    local title year
+    _parse_name "$name"
+    local imdb_id
+    imdb_id=$(get_imdb_id "$tmdb_id" "$media_type")
+
+    local tmp_dir; tmp_dir=$(mktemp -d /tmp/krono_pick.XXXXXX)
+    local providers
+    if [[ "$media_type" == "movie" ]]; then
+        providers=(mb-flix cdn downloader2 superflix 1movies m4uhd lamovie e3b0c442)
+    else
+        providers=(cdn downloader2 mb-flix superflix 1movies m4uhd lamovie e3b0c442)
+    fi
+
+    info "Probing ${#providers[@]} sources in parallel..."
+
+    for provider in "${providers[@]}"; do
+        (
+            local t0 t1
+            t0=$(python3 -c "import time; print(int(time.time()*1000))")
+            local probe
+            probe=$(_probe_provider "$provider" "$tmdb_id" "$media_type" "$season" "$episode" "$imdb_id" "$title" "$year")
+            t1=$(python3 -c "import time; print(int(time.time()*1000))")
+            [[ -z "$probe" ]] && exit 0
+            local stream_url sub_url
+            stream_url=$(printf '%s\n' "$probe" | sed -n '1p')
+            sub_url=$(printf '%s\n' "$probe" | sed -n '2p')
+            local ms=$(( t1 - t0 ))
+            local has_sub="✗"
+            [[ -n "$sub_url" ]] && has_sub="✓"
+            local speed
+            if (( ms < 1000 )); then
+                speed="${ms}ms"
+            else
+                speed=$(awk "BEGIN{printf \"%.1fs\", $ms/1000}")
+            fi
+            printf '%-14s  %6s  subs: %s\t%s\t%s\n' "$provider" "$speed" "$has_sub" "$stream_url" "$sub_url" \
+                > "$tmp_dir/$(printf '%06d' "$ms")_${provider}"
+        ) &
+    done
+
+    wait
+
+    local results
+    results=$(cat "$tmp_dir"/* 2>/dev/null)
+    rm -rf "$tmp_dir"
+
+    [[ -z "$results" ]] && return 1
+
+    local chosen
+    chosen=$(printf '%s\n' "$results" | fzf --prompt="Pick source: " --height=12 --reverse \
+        --delimiter=$'\t' --with-nth=1)
+    [[ -z "$chosen" ]] && return 1
+
+    local stream_url sub_url
+    stream_url=$(printf '%s\n' "$chosen" | cut -f2)
+    sub_url=$(printf '%s\n' "$chosen" | cut -f3)
+    printf '%s\n%s\n' "$stream_url" "${sub_url:-}"
 }
 
 # ── history helpers ───────────────────────────────────────────────────────────
@@ -147,14 +326,19 @@ history_del() {
 # ── play movie ───────────────────────────────────────────────────────────────
 play_movie() {
     local tmdb_id="$1" movie_name="$2"
+    local stream_url sub_url
 
-    info "Fetching stream for ${movie_name}..."
-    local stream_url
-    stream_url=$(get_movie_stream_url "$tmdb_id")
-    [[ -z "$stream_url" ]] && die "No stream URL found — movie may not be available on any source"
-
-    local sub_url
-    sub_url=$(get_subtitle_url "$tmdb_id" "" "" "movie")
+    if [[ "$PICK_SOURCE" == "1" ]]; then
+        local pick_result
+        pick_result=$(pick_source "$tmdb_id" "movie" "" "" "$movie_name") || die "No working sources found"
+        stream_url=$(printf '%s\n' "$pick_result" | sed -n '1p')
+        sub_url=$(printf '%s\n' "$pick_result" | sed -n '2p')
+    else
+        info "Fetching stream for ${movie_name}..."
+        stream_url=$(get_movie_stream_url "$tmdb_id" "$movie_name")
+        [[ -z "$stream_url" ]] && die "No stream URL found — movie may not be available on any source"
+        sub_url=$(get_subtitle_url "$tmdb_id" "" "" "movie")
+    fi
 
     local sub_flag=()
     [[ -n "$sub_url" ]] && sub_flag=(--sub-file="$sub_url")
@@ -162,9 +346,12 @@ play_movie() {
     info "Playing ${movie_name}..."
     "$PLAYER" \
         --force-media-title="${movie_name}" \
-        --referrer="https://player.videasy.net/" \
-        --http-header-fields="Origin: https://player.videasy.net" \
+        --referrer="$CINEBY_REF" \
         --msg-level=ffmpeg/demuxer=no \
+        --sub-visibility=yes \
+        --cache=yes \
+        --demuxer-max-bytes=20MiB \
+        --demuxer-readahead-secs=15 \
         "${sub_flag[@]}" \
         "$stream_url"
 }
@@ -190,13 +377,19 @@ play_episode() {
     local tmdb_id="$1" show_name="$2" season="$3" ep="$4" start_pos="${5:-0}"
 
     while true; do
-        info "Fetching stream for ${show_name} S${season}E${ep}..."
-        local stream_url
-        stream_url=$(get_stream_url "$tmdb_id" "$season" "$ep")
-        [[ -z "$stream_url" ]] && die "No stream URL found — episode may not be available on any source"
+        local stream_url sub_url
 
-        local sub_url
-        sub_url=$(get_subtitle_url "$tmdb_id" "$season" "$ep")
+        if [[ "$PICK_SOURCE" == "1" ]]; then
+            local pick_result
+            pick_result=$(pick_source "$tmdb_id" "tv" "$season" "$ep" "$show_name") || die "No working sources found"
+            stream_url=$(printf '%s\n' "$pick_result" | sed -n '1p')
+            sub_url=$(printf '%s\n' "$pick_result" | sed -n '2p')
+        else
+            info "Fetching stream for ${show_name} S${season}E${ep}..."
+            stream_url=$(get_stream_url "$tmdb_id" "$season" "$ep" "$show_name")
+            [[ -z "$stream_url" ]] && die "No stream URL found — episode may not be available on any source"
+            sub_url=$(get_subtitle_url "$tmdb_id" "$season" "$ep")
+        fi
 
         local sub_flag=() start_flag=()
         [[ -n "$sub_url" ]] && sub_flag=(--sub-file="$sub_url")
@@ -207,9 +400,10 @@ play_episode() {
         rm -f "$eof_file"
         KRONO_EOF_FILE="$eof_file" "$PLAYER" \
             --force-media-title="${show_name} S${season}E${ep}" \
-            --referrer="$VIDKING_REF" \
+            --referrer="$CINEBY_REF" \
             --script="$SCRIPT_DIR/eof_detect.lua" \
             --msg-level=ffmpeg/demuxer=no \
+            --sub-visibility=yes \
             "${start_flag[@]}" \
             "${sub_flag[@]}" \
             "$stream_url"
@@ -218,11 +412,9 @@ play_episode() {
         local next_ep=$(( ep + 1 ))
 
         if [[ "$result" == "eof" ]]; then
-            # Episode finished naturally — save next ep at pos 0 and countdown
             history_set "$tmdb_id" "$show_name" "$season" "$next_ep" 0
             countdown_next "S${season}E${next_ep}" || break
         else
-            # User quit early — save current position and say goodbye
             local pos="${result:-0}"
             history_set "$tmdb_id" "$show_name" "$season" "$ep" "$pos"
             info "See you next time! Progress saved at $(fmt_pos "$pos")."
@@ -238,7 +430,6 @@ play_episode() {
 pick_episode() {
     local tmdb_id="$1" out_file="$2"
 
-    # Fetch season list from TMDB
     local seasons
     seasons=$(curl -s -A "Mozilla/5.0" "https://www.themoviedb.org/tv/${tmdb_id}" \
         | python3 "$SCRIPT_DIR/tmdb_seasons.py" 2>/dev/null | head -20)
@@ -273,6 +464,20 @@ cmd_remove() {
     [[ -z "$1" ]] && die "Usage: krono-cli --remove <tmdb_id>"
     history_del "$1"
     info "Removed $1 from history"
+}
+
+cmd_set_session() {
+    local token="$1"
+    [[ -z "$token" ]] && die "Usage: krono-cli --set-session <token>"
+    mkdir -p "$(dirname "$SESSION_CACHE")"
+    python3 -c "
+import json, time, sys
+data = {'token': sys.argv[1], 'expiresAt': int((time.time() + 1500) * 1000)}
+with open(sys.argv[2], 'w') as f:
+    json.dump(data, f)
+" "$token" "$SESSION_CACHE"
+    info "Session token saved (valid for ~25 minutes)"
+    info "To refresh: open Cineby → F12 → Network → filter 'auth/session' → copy 'token' value"
 }
 
 cmd_movie() {
@@ -314,7 +519,6 @@ cmd_search() {
     tmdb_id=$(echo "$chosen" | cut -f1)
     show_name=$(echo "$chosen" | cut -f2)
 
-    # Check history
     local saved
     saved=$(history_get "$tmdb_id")
     if [[ -n "$saved" ]]; then
@@ -331,7 +535,6 @@ cmd_search() {
         fi
     fi
 
-    # Pick episode manually
     local pick_file; pick_file=$(mktemp)
     pick_episode "$tmdb_id" "$pick_file" || { rm -f "$pick_file"; exit 0; }
     local picked; picked=$(cat "$pick_file"); rm -f "$pick_file"
@@ -346,19 +549,37 @@ cmd_search() {
 # ── main ──────────────────────────────────────────────────────────────────────
 dep_check
 
+# strip -p/--pick from args before dispatch
+CLEAN_ARGS=()
+for _arg in "$@"; do
+    case "$_arg" in
+        --pick|-p) PICK_SOURCE=1 ;;
+        *) CLEAN_ARGS+=("$_arg") ;;
+    esac
+done
+set -- "${CLEAN_ARGS[@]}"
+
 case "$1" in
-    --list|-l)    cmd_list ;;
-    --remove|-r)  cmd_remove "$2" ;;
-    --movie|-m)   cmd_movie "${@:2}" ;;
+    --list|-l)         cmd_list ;;
+    --remove|-r)       cmd_remove "$2" ;;
+    --movie|-m)        cmd_movie "${@:2}" ;;
+    --set-session)     cmd_set_session "$2" ;;
     --help|-h)
         cat << 'EOF'
 krono-cli — stream and track TV shows and movies
 
 Usage:
-  krono-cli [show name]         Search and stream a TV show
-  krono-cli --movie [title]     Search and stream a movie
-  krono-cli --list              Show tracked progress
-  krono-cli --remove <tmdb_id>  Remove a show from history
+  krono-cli [show name]              Search and stream a TV show
+  krono-cli --movie [title]          Search and stream a movie
+  krono-cli -p [show name]           Pick source for a TV show
+  krono-cli --movie -p [title]       Pick source for a movie
+  krono-cli --list                   Show tracked progress
+  krono-cli --remove <tmdb_id>       Remove a show from history
+  krono-cli --set-session <token>    Save a videasy session token
+
+To get a session token:
+  Open Cineby in your browser → F12 → Network tab → play anything
+  → filter by "auth/session" → copy the "token" value from the response
 
 Environment:
   KRONO_PLAYER    Media player (default: mpv)
