@@ -29,6 +29,8 @@ npm install
 ln -s "$PWD/krono-cli" ~/.local/bin/krono-cli
 ```
 
+> All 4 steps are required. `npm install` installs decryption dependencies; the `ln -s` line lets you run `krono-cli` from anywhere.
+
 ## Usage
 
 ```bash
@@ -38,7 +40,6 @@ krono-cli -p Breaking Bad         # pick source manually for a TV show
 krono-cli --movie -p Inception    # pick source manually for a movie
 krono-cli --list                  # show tracked shows and progress
 krono-cli --remove <tmdb_id>      # remove a show from history
-krono-cli --set-session <token>   # save a videasy session token
 ```
 
 After watching an episode, hit Enter to auto-advance to the next one. Progress is saved to `~/.local/state/krono-cli/history.tsv`.
@@ -56,20 +57,6 @@ Pick source:
 
 Sources that fail verification are excluded from the list automatically.
 
-## Session Token
-
-Some content requires a session token from Cineby. To get one:
-
-1. Open [Cineby](https://www.cineby.app) in your browser
-2. Play anything, then open DevTools → Network tab
-3. Filter by `auth/session` and copy the `token` value from the response
-
-```bash
-krono-cli --set-session <token>
-```
-
-Tokens are cached for ~25 minutes.
-
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -77,6 +64,16 @@ Tokens are cached for ~25 minutes.
 | `KRONO_PLAYER` | `mpv` | Media player to use |
 | `KRONO_QUALITY` | `1080p` | Preferred quality (1080p, 720p, 480p, 4K) |
 | `KRONO_DEBUG` | `0` | Set to `1` to show provider debug output |
+
+## Troubleshooting
+
+**"No stream URL found"** — Ensure you ran `npm install` after cloning. Missing node dependencies will cause silent decryption failures.
+
+**"No working sources found"** — If you have a restrictive outbound firewall (e.g. `ufw default deny outgoing`), ensure outbound HTTPS is allowed:
+
+```bash
+sudo ufw allow out 443/tcp
+```
 
 ## Credits
 
