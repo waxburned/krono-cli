@@ -681,7 +681,7 @@ cmd_movie() {
     play_movie "$tmdb_id" "$movie_name"
 }
 
-cmd_anime() {
+anime_search_and_play() {
     local query="$*"
     [[ -z "$query" ]] && read -rp "Search anime: " query
     [[ -z "$query" ]] && exit 0
@@ -728,6 +728,74 @@ cmd_anime() {
     [[ -z "$episode" ]] && exit 0
 
     play_anime_episode "$show_id" "$show_name" "$episode" "$mal_id" "$trans_type" 0
+}
+
+# ── resume from AniList "Currently Watching" ───────────────────────────────────
+anime_resume_from_anilist() {
+    local trans_type="sub"
+    [[ "$DUB_MODE" == "1" ]] && trans_type="dub"
+
+    local token
+    token=$(anilist_get_token)
+    [[ -z "$token" ]] && die "Not authenticated with AniList — run: krono-cli --anilist-auth"
+
+    info "Fetching your AniList 'Currently Watching' list..."
+    local watching
+    watching=$(python3 "$SCRIPT_DIR/anilist_watching.py" "$token" 2>/dev/null)
+    [[ -z "$watching" ]] && die "Nothing in your AniList 'Currently Watching' list"
+
+    local chosen
+    chosen=$(printf '%s\n' "$watching" | awk -F'\t' '{
+        eps = $5 == "" ? "?" : $5
+        printf "%s\t%s (%s/%s)\n", $0, $3, $4, eps
+    }' | fzf --prompt="Continue watching: " --height=15 --reverse --delimiter=$'\t' --with-nth=7)
+    [[ -z "$chosen" ]] && exit 0
+
+    local mal_id anilist_title progress romaji_title
+    mal_id=$(printf '%s\n' "$chosen" | cut -f2)
+    anilist_title=$(printf '%s\n' "$chosen" | cut -f3)
+    progress=$(printf '%s\n' "$chosen" | cut -f4)
+    romaji_title=$(printf '%s\n' "$chosen" | cut -f6)
+
+    info "Looking up '${romaji_title}' on allanime..."
+    local results
+    results=$(anime_search "$romaji_title" "$trans_type")
+    [[ -z "$results" ]] && die "Could not find '${anilist_title}' on allanime — try searching manually"
+
+    local top show_id show_name ep_count
+    if [[ -n "$mal_id" && "$mal_id" != "0" ]]; then
+        top=$(printf '%s\n' "$results" | awk -F'\t' -v mid="$mal_id" '$4 == mid' | head -1)
+    fi
+    [[ -z "$top" ]] && top=$(printf '%s\n' "$results" | head -1)
+    show_id=$(printf '%s\n' "$top" | cut -f1)
+    show_name=$(printf '%s\n' "$top" | cut -f2)
+    ep_count=$(printf '%s\n' "$top" | cut -f3)
+    info "Matched: ${show_name}"
+
+    local episode=$(( progress + 1 ))
+    local max_ep="${ep_count:-0}"
+    if [[ "$max_ep" -gt 0 ]] 2>/dev/null && (( episode > max_ep )); then
+        info "'${show_name}' is fully watched on AniList (${progress}/${max_ep})."
+        episode="$max_ep"
+    fi
+
+    play_anime_episode "$show_id" "$show_name" "$episode" "$mal_id" "$trans_type" 0
+}
+
+cmd_anime() {
+    if [[ $# -gt 0 ]]; then
+        anime_search_and_play "$@"
+        return
+    fi
+
+    local choice
+    choice=$(printf '%s\n' "Currently Watching (AniList)" "Search anime" \
+        | fzf --prompt="Anime: " --height=8 --reverse)
+    case "$choice" in
+        "Currently Watching"*) anime_resume_from_anilist ;;
+        "Search anime")        anime_search_and_play ;;
+        *)                      exit 0 ;;
+    esac
 }
 
 cmd_mal_auth() {
@@ -813,7 +881,8 @@ krono-cli — stream and track TV shows, movies, and anime
 Usage:
   krono-cli [show name]              Search and stream a TV show
   krono-cli --movie [title]          Search and stream a movie
-  krono-cli --anime [title]          Search and stream an anime (sub by default)
+  krono-cli --anime                  Anime menu: continue from AniList or search
+  krono-cli --anime [title]          Search and stream an anime directly (sub by default)
   krono-cli --anime --dub [title]    Search and stream an anime, dubbed
   krono-cli -p [show name]           Pick source for a TV show
   krono-cli --movie -p [title]       Pick source for a movie
