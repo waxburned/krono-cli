@@ -37,7 +37,8 @@ ln -s "$PWD/krono-cli" ~/.local/bin/krono-cli
 ```bash
 krono-cli Breaking Bad            # search and stream a TV show
 krono-cli --movie Inception       # search and stream a movie
-krono-cli --anime kaiju no 8      # search and stream an anime (subbed by default)
+krono-cli --anime                 # anime menu: continue from AniList or search
+krono-cli --anime kaiju no 8      # search and stream an anime directly (subbed by default)
 krono-cli --anime --dub one piece # search and stream an anime, dubbed
 krono-cli -p Breaking Bad         # pick source manually for a TV show
 krono-cli --movie -p Inception    # pick source manually for a movie
@@ -75,7 +76,18 @@ Sources that fail verification are excluded from the list automatically.
 
 ## Anime (allanime)
 
-Anime search, episode listing, and streaming go through the same allanime backend used by [ani-cli](https://github.com/pystardust/ani-cli) and [curd](https://github.com/wraient/curd). No extra setup needed — just run:
+Anime search, episode listing, and streaming go through the same allanime backend used by [ani-cli](https://github.com/pystardust/ani-cli) and [curd](https://github.com/wraient/curd). No extra setup needed.
+
+Running `krono-cli --anime` with no title opens a menu:
+
+```bash
+krono-cli --anime
+# Anime:
+#   Currently Watching (AniList)
+#   Search anime
+```
+
+"Currently Watching" pulls your AniList list (requires `--anilist-auth`), matches each entry to allanime by MyAnimeList ID, and resumes from the next unwatched episode. "Search anime" behaves like a direct title search:
 
 ```bash
 krono-cli --anime/-a [title]
