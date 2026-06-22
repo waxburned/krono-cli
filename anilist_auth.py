@@ -84,7 +84,11 @@ body = urllib.parse.urlencode({
 req = urllib.request.Request(
     "https://anilist.co/api/v2/oauth/token",
     data=body,
-    headers={"Content-Type": "application/x-www-form-urlencoded"},
+    headers={
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    },
 )
 
 try:
