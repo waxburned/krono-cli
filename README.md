@@ -19,6 +19,7 @@ A CLI tool to stream and track TV shows and movies from your terminal, inspired 
 - `node` (18+) — stream decryption
 - `curl` — HTTP requests
 - `python3` — parsing
+- `openssl` — anime stream decryption (already present on Linux/macOS/Git Bash)
 
 ## Installation
 
@@ -34,13 +35,18 @@ ln -s "$PWD/krono-cli" ~/.local/bin/krono-cli
 ```bash
 krono-cli Breaking Bad            # search and stream a TV show
 krono-cli --movie Inception       # search and stream a movie
+krono-cli --anime kaiju no 8      # search and stream an anime (subbed by default)
+krono-cli --anime --dub one piece # search and stream an anime, dubbed
 krono-cli -p Breaking Bad         # pick source manually for a TV show
 krono-cli --movie -p Inception    # pick source manually for a movie
+krono-cli --anime -p kaiju no 8   # pick source manually for an anime (sub + dub)
 krono-cli --list                  # show tracked shows and progress
 krono-cli --remove <tmdb_id>      # remove a show from history
+krono-cli --mal-auth              # authenticate with MyAnimeList
+krono-cli --anilist-auth          # authenticate with AniList
 ```
 
-After watching an episode, hit Enter to auto-advance to the next one. Progress is saved to `~/.local/state/krono-cli/history.tsv`.
+After watching an episode, hit Enter to auto-advance to the next one. Progress is saved to `~/.local/state/krono-cli/history.tsv` (anime to `anime_history.tsv`).
 
 ## Source Picker (-p)
 
@@ -53,7 +59,52 @@ Pick source:
   downloader2     1.8s   subs: ✓
 ```
 
+For anime, both sub and dub variants are probed across every provider at once, so you can pick exactly which audio/sub combination you want:
+
+```
+Pick source:
+  Mp4          sub    480ms
+  Luf-Mp4      sub    1.1s
+  Mp4          dub    610ms
+  Fm-Hls       dub    1.4s
+```
+
 Sources that fail verification are excluded from the list automatically.
+
+## Anime (allanime)
+
+Anime search, episode listing, and streaming go through the same allanime backend used by [ani-cli](https://github.com/pystardust/ani-cli) and [curd](https://github.com/wraient/curd). No extra setup needed — just run:
+
+```bash
+krono-cli --anime/-a [title]
+krono-cli --anime --dub [title]   # dubbed audio instead of subbed
+```
+
+Anime progress is tracked separately from TV/movies in `~/.local/state/krono-cli/anime_history.tsv`, with resume support the same as shows.
+
+## MyAnimeList Tracking
+
+Watched anime episodes can auto-sync to your MyAnimeList list. Requires your own MAL API client (free, takes a minute):
+
+1. Register an app at [myanimelist.net/apiconfig](https://myanimelist.net/apiconfig) (App Type: "other"; the redirect URI doesn't matter — krono-cli intercepts it locally)
+2. Copy the Client ID
+3. Run:
+
+```bash
+MAL_CLIENT_ID=<your_client_id> krono-cli --mal-auth
+```
+
+This opens your browser to authorize, then saves a token to `~/.local/state/krono-cli/mal_token.json`. After that, finishing an anime episode automatically updates your MAL list's watched-episode count. Tokens auto-refresh.
+
+## AniList Tracking
+
+AniList tracking works out of the box — no app registration required:
+
+```bash
+krono-cli --anilist-auth
+```
+
+This reuses the same public OAuth client [curd](https://github.com/wraient/curd) uses, so there's nothing to set up. Watched anime episodes automatically update your AniList progress (resolved via MyAnimeList ID when available, falling back to title search).
 
 ## Environment Variables
 
@@ -62,6 +113,7 @@ Sources that fail verification are excluded from the list automatically.
 | `KRONO_PLAYER` | `mpv` | Media player to use |
 | `KRONO_QUALITY` | `1080p` | Preferred quality (1080p, 720p, 480p, 4K) |
 | `KRONO_DEBUG` | `0` | Set to `1` to show provider debug output |
+| `MAL_CLIENT_ID` | — | Your MyAnimeList API client ID, needed for `--mal-auth` |
 
 ## Windows Setup
 

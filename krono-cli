@@ -7,14 +7,21 @@ _src="${BASH_SOURCE[0]}"
 while [[ -L "$_src" ]]; do _src="$(readlink "$_src")"; done
 SCRIPT_DIR="$(cd "$(dirname "$_src")" && pwd)"
 HISTORY_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/krono-cli/history.tsv"
+ANIME_HISTORY_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/krono-cli/anime_history.tsv"
+MAL_TOKEN_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/krono-cli/mal_token.json"
+ANILIST_TOKEN_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/krono-cli/anilist_token.json"
 VIDEASY_API="https://api.videasy.to"
 CINEBY_REF="https://www.cineby.at/"
+ALLANIME_REF="https://youtu-chan.com"
 PLAYER="${KRONO_PLAYER:-mpv}"
 QUALITY="${KRONO_QUALITY:-1080p}"
 PICK_SOURCE=0
+ANIME_MODE=0
+DUB_MODE=0
 
 mkdir -p "$(dirname "$HISTORY_FILE")"
 [[ ! -f "$HISTORY_FILE" ]] && touch "$HISTORY_FILE"
+[[ ! -f "$ANIME_HISTORY_FILE" ]] && touch "$ANIME_HISTORY_FILE"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 die()  { printf '\e[31mERROR\e[0m: %s\n' "$*" >&2; exit 1; }
@@ -48,11 +55,11 @@ tmdb_movie_search() {
 
 # ── URL verification ──────────────────────────────────────────────────────────
 _verify_url() {
-    local url="$1"
+    local url="$1" referer="${2:-$CINEBY_REF}"
     local verify_tmp; verify_tmp=$(mktemp /tmp/krono_verify.XXXXXX)
     local status
     status=$(curl -s --max-time 8 \
-        -H "Referer: $CINEBY_REF" \
+        -H "Referer: $referer" \
         -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) Gecko/20100101 Firefox/151.0" \
         -o "$verify_tmp" -w "%{http_code}" \
         "$url" 2>/dev/null)
@@ -72,7 +79,7 @@ _verify_url() {
             fi
             local child_status
             child_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
-                -H "Referer: $CINEBY_REF" \
+                -H "Referer: $referer" \
                 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) Gecko/20100101 Firefox/151.0" \
                 "$child" 2>/dev/null)
             [[ "$child_status" =~ ^(200|206)$ ]] || { rm -f "$verify_tmp"; return 1; }
@@ -246,6 +253,184 @@ pick_source() {
     printf '%s\n%s\n' "$stream_url" "${sub_url:-}"
 }
 
+# ── anime (allanime) ──────────────────────────────────────────────────────────
+anime_search() {
+    local query="$1" trans_type="${2:-sub}"
+    python3 "$SCRIPT_DIR/anime_search.py" "$query" "$trans_type" 2>/dev/null
+}
+
+# outputs: stream_url\treferer for the first provider that resolves + verifies
+get_anime_stream_url() {
+    local show_id="$1" episode="$2" trans_type="${3:-sub}"
+    local sources
+    sources=$(python3 "$SCRIPT_DIR/anime_sources.py" "$show_id" "$episode" "$trans_type" 2>/dev/null)
+    [[ -z "$sources" ]] && return 1
+
+    local priority name encoded_url
+    while IFS=$'\t' read -r priority name encoded_url; do
+        local extracted url referer
+        extracted=$(python3 "$SCRIPT_DIR/anime_extract.py" "$encoded_url" "$name" 2>/dev/null)
+        [[ -z "$extracted" ]] && continue
+        url=$(printf '%s\n' "$extracted" | cut -f1)
+        referer=$(printf '%s\n' "$extracted" | cut -f2)
+        _verify_url "$url" "$referer" || continue
+        printf '%s\t%s\n' "$url" "$referer"
+        return 0
+    done <<< "$sources"
+    return 1
+}
+
+# ── interactive anime source picker (sub + dub, all providers) ────────────────
+# outputs: stream_url\treferer
+pick_anime_source() {
+    local show_id="$1" show_name="$2" episode="$3"
+
+    local tmp_dir; tmp_dir=$(mktemp -d /tmp/krono_pick.XXXXXX)
+    info "Probing sub + dub sources in parallel..."
+
+    for trans_type in sub dub; do
+        (
+            local sources
+            sources=$(python3 "$SCRIPT_DIR/anime_sources.py" "$show_id" "$episode" "$trans_type" 2>/dev/null)
+            [[ -z "$sources" ]] && exit 0
+            local priority name encoded_url
+            while IFS=$'\t' read -r priority name encoded_url; do
+                (
+                    local t0 t1
+                    t0=$(python3 -c "import time; print(int(time.time()*1000))")
+                    local extracted url referer
+                    extracted=$(python3 "$SCRIPT_DIR/anime_extract.py" "$encoded_url" "$name" 2>/dev/null)
+                    t1=$(python3 -c "import time; print(int(time.time()*1000))")
+                    [[ -z "$extracted" ]] && exit 0
+                    url=$(printf '%s\n' "$extracted" | cut -f1)
+                    referer=$(printf '%s\n' "$extracted" | cut -f2)
+                    _verify_url "$url" "$referer" || exit 0
+                    local ms=$(( t1 - t0 ))
+                    local speed
+                    if (( ms < 1000 )); then speed="${ms}ms"
+                    else speed=$(awk "BEGIN{printf \"%.1fs\", $ms/1000}")
+                    fi
+                    printf '%-12s %-5s %6s\t%s\t%s\n' "$name" "$trans_type" "$speed" "$url" "$referer" \
+                        > "$tmp_dir/$(printf '%06d' "$ms")_${trans_type}_${name}"
+                ) &
+            done <<< "$sources"
+            wait
+        ) &
+    done
+
+    wait
+
+    local results
+    results=$(cat "$tmp_dir"/* 2>/dev/null)
+    rm -rf "$tmp_dir"
+    [[ -z "$results" ]] && return 1
+
+    local chosen
+    chosen=$(printf '%s\n' "$results" | fzf --prompt="Pick source: " --height=12 --reverse \
+        --delimiter=$'\t' --with-nth=1)
+    [[ -z "$chosen" ]] && return 1
+
+    local url referer
+    url=$(printf '%s\n' "$chosen" | cut -f2)
+    referer=$(printf '%s\n' "$chosen" | cut -f3)
+    printf '%s\t%s\n' "$url" "$referer"
+}
+
+# ── anime history helpers ──────────────────────────────────────────────────────
+# format: show_id \t show_name \t episode \t position_seconds
+anime_history_get() {
+    grep -m1 "^${1}"$'\t' "$ANIME_HISTORY_FILE" | cut -f2-4
+}
+anime_history_set() {
+    local key="$1" name="$2" ep="$3" pos="${4:-0}"
+    local tmp; tmp=$(mktemp)
+    grep -v "^${key}"$'\t' "$ANIME_HISTORY_FILE" > "$tmp"
+    printf '%s\t%s\t%s\t%s\n' "$key" "$name" "$ep" "$pos" >> "$tmp"
+    mv "$tmp" "$ANIME_HISTORY_FILE"
+}
+
+# ── MyAnimeList tracking ───────────────────────────────────────────────────────
+mal_get_token() {
+    [[ ! -f "$MAL_TOKEN_FILE" ]] && return 1
+    python3 -c "
+import json, time, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    if d.get('expires_at', 0) > time.time():
+        print(d['access_token'])
+except Exception:
+    pass
+" "$MAL_TOKEN_FILE"
+}
+
+mal_refresh_token() {
+    [[ ! -f "$MAL_TOKEN_FILE" ]] && return 1
+    local refresh_token client_id
+    refresh_token=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('refresh_token',''))" "$MAL_TOKEN_FILE" 2>/dev/null)
+    client_id=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('client_id',''))" "$MAL_TOKEN_FILE" 2>/dev/null)
+    [[ -z "$refresh_token" || -z "$client_id" ]] && return 1
+
+    local resp
+    resp=$(curl -s -X POST "https://myanimelist.net/v1/oauth2/token" \
+        --data-urlencode "client_id=${client_id}" \
+        --data-urlencode "grant_type=refresh_token" \
+        --data-urlencode "refresh_token=${refresh_token}")
+    [[ -z "$resp" ]] && return 1
+
+    python3 -c "
+import json, time, sys
+token = json.loads(sys.argv[1])
+if 'access_token' not in token:
+    sys.exit(1)
+token['expires_at'] = time.time() + token.get('expires_in', 1800)
+token['client_id'] = sys.argv[3]
+with open(sys.argv[2], 'w') as f:
+    json.dump(token, f)
+" "$resp" "$MAL_TOKEN_FILE" "$client_id"
+}
+
+mal_update_episode() {
+    local mal_id="$1" episode="$2"
+    [[ -z "$mal_id" || "$mal_id" == "0" || "$mal_id" == "null" ]] && return 0
+    local token
+    token=$(mal_get_token)
+    if [[ -z "$token" ]]; then
+        mal_refresh_token || return 0
+        token=$(mal_get_token)
+        [[ -z "$token" ]] && return 0
+    fi
+    curl -s -X PUT \
+        "https://api.myanimelist.net/v2/anime/${mal_id}/my_list_status" \
+        -H "Authorization: Bearer ${token}" \
+        --data-urlencode "status=watching" \
+        --data-urlencode "num_watched_episodes=${episode}" \
+        > /dev/null 2>&1
+    [[ "${KRONO_DEBUG:-0}" == "1" ]] && info "[debug] MAL: updated ${mal_id} -> episode ${episode}"
+}
+
+# ── AniList tracking ───────────────────────────────────────────────────────────
+anilist_get_token() {
+    [[ ! -f "$ANILIST_TOKEN_FILE" ]] && return 1
+    python3 -c "
+import json, time, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    if d.get('expires_at', 0) > time.time():
+        print(d['access_token'])
+except Exception:
+    pass
+" "$ANILIST_TOKEN_FILE"
+}
+
+anilist_update_episode() {
+    local mal_id="$1" show_name="$2" episode="$3"
+    local token
+    token=$(anilist_get_token)
+    [[ -z "$token" ]] && return 0
+    python3 "$SCRIPT_DIR/anilist_update.py" "$token" "$mal_id" "$show_name" "$episode" 2>/dev/null
+    [[ "${KRONO_DEBUG:-0}" == "1" ]] && info "[debug] AniList: updated '${show_name}' -> episode ${episode}"
+}
+
 # ── history helpers ───────────────────────────────────────────────────────────
 # format: tmdb_id \t show_name \t season \t episode \t position_seconds
 history_get() {
@@ -379,6 +564,62 @@ play_episode() {
     done
 }
 
+# ── play anime episode ────────────────────────────────────────────────────────
+play_anime_episode() {
+    local show_id="$1" show_name="$2" episode="$3" mal_id="$4" trans_type="${5:-sub}" start_pos="${6:-0}"
+
+    while true; do
+        local stream_url referer
+
+        if [[ "$PICK_SOURCE" == "1" ]]; then
+            local pick_result
+            pick_result=$(pick_anime_source "$show_id" "$show_name" "$episode") || die "No working sources found"
+            stream_url=$(printf '%s\n' "$pick_result" | cut -f1)
+            referer=$(printf '%s\n' "$pick_result" | cut -f2)
+        else
+            info "Fetching stream for ${show_name} Episode ${episode} [${trans_type}]..."
+            local result
+            result=$(get_anime_stream_url "$show_id" "$episode" "$trans_type")
+            [[ -z "$result" ]] && die "No stream found — episode may not be available on any source"
+            stream_url=$(printf '%s\n' "$result" | cut -f1)
+            referer=$(printf '%s\n' "$result" | cut -f2)
+        fi
+
+        local start_flag=()
+        [[ "$start_pos" -gt 0 ]] 2>/dev/null && start_flag=(--start="$start_pos")
+
+        info "Playing ${show_name} Episode ${episode}${start_pos:+$([ "$start_pos" -gt 0 ] 2>/dev/null && echo " (resuming from ${start_pos}s)")}..."
+        local eof_file; eof_file=$(mktemp)
+        rm -f "$eof_file"
+        local eof_file_native; eof_file_native=$(cygpath -w "$eof_file" 2>/dev/null || echo "$eof_file")
+        KRONO_EOF_FILE="$eof_file_native" "$PLAYER" \
+            --force-media-title="${show_name} Episode ${episode} [${trans_type^^}]" \
+            --referrer="${referer:-$ALLANIME_REF}" \
+            --script="$SCRIPT_DIR/eof_detect.lua" \
+            --msg-level=ffmpeg/demuxer=no \
+            "${start_flag[@]}" \
+            "$stream_url"
+
+        local result; result=$(cat "$eof_file" 2>/dev/null); rm -f "$eof_file"
+        local next_ep=$(( episode + 1 ))
+
+        if [[ "$result" == "eof" ]]; then
+            anime_history_set "$show_id" "$show_name" "$next_ep" 0
+            mal_update_episode "$mal_id" "$episode"
+            anilist_update_episode "$mal_id" "$show_name" "$episode"
+            countdown_next "Episode ${next_ep}" || break
+        else
+            local pos="${result:-0}"
+            anime_history_set "$show_id" "$show_name" "$episode" "$pos"
+            info "See you next time! Progress saved at $(fmt_pos "$pos")."
+            break
+        fi
+
+        episode=$next_ep
+        start_pos=0
+    done
+}
+
 # ── season/episode picker ─────────────────────────────────────────────────────
 pick_episode() {
     local tmdb_id="$1" out_file="$2"
@@ -440,6 +681,65 @@ cmd_movie() {
     play_movie "$tmdb_id" "$movie_name"
 }
 
+cmd_anime() {
+    local query="$*"
+    [[ -z "$query" ]] && read -rp "Search anime: " query
+    [[ -z "$query" ]] && exit 0
+
+    local trans_type="sub"
+    [[ "$DUB_MODE" == "1" ]] && trans_type="dub"
+
+    info "Searching for '${query}' [${trans_type}]..."
+    local results
+    results=$(anime_search "$query" "$trans_type")
+    [[ -z "$results" ]] && die "No results found"
+
+    local chosen
+    chosen=$(printf '%s\n' "$results" | fzf --prompt="Select anime: " --height=20 --reverse \
+        --delimiter=$'\t' --with-nth=2)
+    [[ -z "$chosen" ]] && exit 0
+
+    local show_id show_name ep_count mal_id
+    show_id=$(printf '%s\n' "$chosen" | cut -f1)
+    show_name=$(printf '%s\n' "$chosen" | cut -f2)
+    ep_count=$(printf '%s\n' "$chosen" | cut -f3)
+    mal_id=$(printf '%s\n' "$chosen" | cut -f4)
+
+    local saved
+    saved=$(anime_history_get "$show_id")
+    if [[ -n "$saved" ]]; then
+        local saved_name saved_ep saved_pos
+        saved_name=$(printf '%s\n' "$saved" | cut -f1)
+        saved_ep=$(printf '%s\n' "$saved" | cut -f2)
+        saved_pos=$(printf '%s\n' "$saved" | cut -f3)
+        local resume_msg="Episode ${saved_ep}"
+        [[ "${saved_pos:-0}" -gt 0 ]] 2>/dev/null && resume_msg+=" at $(fmt_pos "$saved_pos")"
+        read -rp "Continue '${show_name}' from ${resume_msg}? [Y/n] " cont
+        if [[ "${cont,,}" != "n" ]]; then
+            play_anime_episode "$show_id" "$show_name" "$saved_ep" "$mal_id" "$trans_type" "$saved_pos"
+            return
+        fi
+    fi
+
+    local max_ep="${ep_count:-0}"
+    [[ "$max_ep" -le 0 ]] 2>/dev/null && max_ep=100
+    local episode
+    episode=$(seq 1 "$max_ep" | fzf --prompt="Episode: " --height=15 --reverse)
+    [[ -z "$episode" ]] && exit 0
+
+    play_anime_episode "$show_id" "$show_name" "$episode" "$mal_id" "$trans_type" 0
+}
+
+cmd_mal_auth() {
+    local client_id="${MAL_CLIENT_ID:-}"
+    [[ -z "$client_id" ]] && die "Set the MAL_CLIENT_ID environment variable first — register an app at myanimelist.net/apiconfig"
+    python3 "$SCRIPT_DIR/mal_auth.py" "$client_id" "$MAL_TOKEN_FILE"
+}
+
+cmd_anilist_auth() {
+    python3 "$SCRIPT_DIR/anilist_auth.py" "$ANILIST_TOKEN_FILE"
+}
+
 cmd_search() {
     local query="$*"
     [[ -z "$query" ]] && read -rp "Search: " query
@@ -493,6 +793,7 @@ CLEAN_ARGS=()
 for _arg in "$@"; do
     case "$_arg" in
         --pick|-p) PICK_SOURCE=1 ;;
+        --dub)     DUB_MODE=1 ;;
         *) CLEAN_ARGS+=("$_arg") ;;
     esac
 done
@@ -502,21 +803,40 @@ case "$1" in
     --list|-l)         cmd_list ;;
     --remove|-r)       cmd_remove "$2" ;;
     --movie|-m)        cmd_movie "${@:2}" ;;
+    --anime|-a)        cmd_anime "${@:2}" ;;
+    --mal-auth)        cmd_mal_auth ;;
+    --anilist-auth)    cmd_anilist_auth ;;
     --help|-h)
         cat << 'EOF'
-krono-cli — stream and track TV shows and movies
+krono-cli — stream and track TV shows, movies, and anime
 
 Usage:
   krono-cli [show name]              Search and stream a TV show
   krono-cli --movie [title]          Search and stream a movie
+  krono-cli --anime [title]          Search and stream an anime (sub by default)
+  krono-cli --anime --dub [title]    Search and stream an anime, dubbed
   krono-cli -p [show name]           Pick source for a TV show
   krono-cli --movie -p [title]       Pick source for a movie
+  krono-cli --anime -p [title]       Pick source for an anime (shows sub + dub)
   krono-cli --list                   Show tracked progress
   krono-cli --remove <tmdb_id>       Remove a show from history
+  krono-cli --mal-auth               Authenticate with MyAnimeList
+  krono-cli --anilist-auth           Authenticate with AniList
+
+MyAnimeList tracking:
+  Register an app at myanimelist.net/apiconfig, then:
+    MAL_CLIENT_ID=<id> krono-cli --mal-auth
+  Watched anime episodes auto-update your MAL list after this.
+
+AniList tracking:
+  krono-cli --anilist-auth
+  No app registration needed. Watched anime episodes auto-update your list.
 
 Environment:
-  KRONO_PLAYER    Media player (default: mpv)
-  KRONO_QUALITY   Preferred quality: 1080p, 720p, 480p, 4K (default: 1080p)
+  KRONO_PLAYER     Media player (default: mpv)
+  KRONO_QUALITY    Preferred quality: 1080p, 720p, 480p, 4K (default: 1080p)
+  KRONO_DEBUG      Set to 1 to show provider debug output
+  MAL_CLIENT_ID    Your MyAnimeList API client ID (for --mal-auth)
 EOF
         ;;
     *)  cmd_search "$@" ;;
